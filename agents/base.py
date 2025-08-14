@@ -11,6 +11,14 @@ from core.context import GlobalContext
 # Get a logger instance for this module.
 logger = logging.getLogger(__name__)
 
+# Import the context error for handling
+try:
+    from real_llm_client import ContextTooLargeError
+except ImportError:
+    # Define a fallback if not available
+    class ContextTooLargeError(Exception):
+        pass
+
 class BaseAgent(ABC):
     """
     An abstract base class that defines the universal interface for all specialized agents.
@@ -66,6 +74,31 @@ class BaseAgent(ABC):
         PlannerAgent to understand the tools at its disposal.
         """
         return {"name": self.name, "description": self.description}
+    
+    def handle_context_error(self, error: ContextTooLargeError, goal: str) -> AgentResponse:
+        """
+        Common handler for context size errors across all agents.
+        
+        Args:
+            error: The ContextTooLargeError that was caught
+            goal: The goal that caused the error
+            
+        Returns:
+            AgentResponse with failure and detailed error information
+        """
+        error_message = f"""
+{self.name} failed due to context size limits.
+
+Goal: {goal[:200]}{'...' if len(goal) > 200 else ''}
+
+{str(error)}
+
+The agent cannot proceed with this task due to context size constraints.
+Consider breaking down the task into smaller parts or reducing the scope.
+"""
+        
+        logger.error(f"{self.name} context size error: {str(error)}")
+        return AgentResponse(success=False, message=error_message.strip())
 
 
 # --- Self-Testing Block ---

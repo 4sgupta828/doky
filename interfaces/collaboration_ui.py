@@ -8,7 +8,7 @@ from typing import Dict, Any
 
 # Foundational dependencies
 from core.context import GlobalContext
-from core.models import TaskGraph, TaskNode
+from core.models import TaskGraph, TaskNode, AgentResponse
 
 # Get a logger instance for this module
 logger = logging.getLogger(__name__)
@@ -150,7 +150,30 @@ class CollaborationUI:
                 return choice
             print("Please enter 'approve', 'refine', or 'cancel'")
 
+    def display_help(self, help_text: str):
+        """Displays a formatted help menu."""
+        print("\n" + "="*80)
+        print(f"📚 {Style.BOLD}AGENT COMMAND HELP{Style.RESET}")
+        print("="*80)
+        print("To run a high-level goal, just type your request.")
+        print("To invoke a specific agent, use one of the following commands:")
+        print(help_text)
+        print("="*80)
 
+    def display_direct_command_result(self, agent_name: str, response: AgentResponse):
+        """Displays the formatted result of a single agent's execution."""
+        print("\n" + "-"*80)
+        if response.success:
+            print(f"✅ {Style.Fg.GREEN}{Style.BOLD}{agent_name} finished successfully.{Style.RESET}")
+        else:
+            print(f"❌ {Style.Fg.RED}{Style.BOLD}{agent_name} failed.{Style.RESET}")
+        
+        print(f"   - {Style.BOLD}Message:{Style.RESET} {response.message}")
+        
+        if response.artifacts_generated:
+            print(f"   - {Style.BOLD}Artifacts Created/Updated:{Style.RESET} {', '.join(response.artifacts_generated)}")
+        print("-"*80)
+        
 # --- Self-Testing Block ---
 if __name__ == "__main__":
     import unittest

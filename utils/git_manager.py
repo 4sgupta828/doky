@@ -48,7 +48,7 @@ for the AdaptiveEngine's needs.
                 self._run_git_command(["commit", "-m", "Initial commit"])
                 logger.info(f"Initialized new Git repository at {self.repo_path}")
 
-        except Exception as e:
+        except Exception:
             logger.critical(f"Failed to initialize Git workspace at {self.repo_path}", exc_info=True)
             raise
 
@@ -105,19 +105,58 @@ for the AdaptiveEngine's needs.
             return f.read()
 
     def list_files(self, relative_path: str = ".") -> List[str]:
-        """Lists all files in a given directory, recursively."""
+        """Lists relevant project files, filtering out build artifacts and dependencies."""
         base_path = self.repo_path / relative_path
         if not base_path.is_dir():
             return []
         
-        all_files = []
-        for root, _, files in os.walk(base_path):
+        # Directories to skip entirely
+        skip_dirs = {
+            '.git', '__pycache__', '.pytest_cache', 'node_modules', 
+            '.venv', 'venv', 'env', '.env', 'dist', 'build', 
+            'target', '.idea', '.vscode', '.DS_Store', 'site-packages'
+        }
+        
+        # File extensions to skip
+        skip_extensions = {
+            '.pyc', '.pyo', '.pyd', '.so', '.dll', '.dylib', '.exe',
+            '.log', '.tmp', '.cache', '.lock', '.pid', '.swp', '.bak',
+            '.class', '.jar', '.war', '.ear'
+        }
+        
+        # Files to skip by name
+        skip_files = {
+            '.DS_Store', 'Thumbs.db', 'desktop.ini', '.coverage',
+            'coverage.xml', 'pytest.ini', 'tox.ini'
+        }
+        
+        relevant_files = []
+        for root, dirs, files in os.walk(base_path):
+            # Filter out directories we want to skip
+            dirs[:] = [d for d in dirs if d not in skip_dirs]
+            
             for file in files:
-                # Get the path relative to the repo root.
+                # Skip files by name or extension
+                if file in skip_files:
+                    continue
+                    
+                file_ext = Path(file).suffix.lower()
+                if file_ext in skip_extensions:
+                    continue
+                
+                # Get the path relative to the repo root
                 full_path = Path(root) / file
-                if ".git" not in str(full_path):
-                    all_files.append(str(full_path.relative_to(self.repo_path)))
-        return all_files
+                relative_file_path = str(full_path.relative_to(self.repo_path))
+                
+                # Additional filtering: skip files in certain patterns
+                if any(pattern in relative_file_path for pattern in [
+                    '__pycache__', '.git/', 'site-packages/', '.dist-info/'
+                ]):
+                    continue
+                
+                relevant_files.append(relative_file_path)
+        
+        return sorted(relevant_files)  # Sort for consistency
 
     def revert_changes(self, task_id: str):
         """

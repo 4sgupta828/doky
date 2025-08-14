@@ -4,7 +4,7 @@ import logging
 from typing import Dict, Any, List
 
 # Foundational dependencies from Tier 1
-from .base import BaseAgent
+from .base import BaseAgent, ContextTooLargeError
 from core.context import GlobalContext
 from core.models import AgentResponse, TaskGraph, TaskNode, ValidationError
 
@@ -186,6 +186,8 @@ class PlannerAgent(BaseAgent):
                 artifacts_generated=["task_graph"]
             )
         
+        except ContextTooLargeError as e:
+            return self.handle_context_error(e, goal)
         except NotImplementedError:
             msg = "LLMClient is not implemented. Cannot generate a plan."
             logger.critical(msg)

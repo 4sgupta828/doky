@@ -51,6 +51,33 @@ AGENT_REGISTRY: Dict[str, Type[BaseAgent]] = {
     "ChiefQualityOfficerAgent": ChiefQualityOfficerAgent,
 }
 
+# NEW: User-friendly aliases for direct invocation.
+AGENT_ALIASES: Dict[str, str] = {
+    "@help": "HelpAgent", # A virtual agent for the help command
+    "@planner": "PlannerAgent",
+    "@refiner": "PlanRefinementAgent",
+    "@clarify": "IntentClarificationAgent",
+    "@spec": "SpecGenerationAgent",
+    "@manifest": "CodeManifestAgent",
+    "@coder": "CodeGenerationAgent",
+    "@testgen": "TestGenerationAgent",
+    "@tester": "TestRunnerAgent",
+    "@context": "ContextBuilderAgent",
+    "@run": "ToolingAgent",
+    "@debug": "DebuggingAgent",
+    "@audit": "ChiefQualityOfficerAgent",
+}
+
+def get_agent_help() -> str:
+    """Generates a formatted help string of all available commands."""
+    help_text = "Available commands:\n"
+    # We need to get the description from an instance of each agent
+    for alias, agent_name in AGENT_ALIASES.items():
+        if agent_name in AGENT_REGISTRY:
+            # Briefly instantiate the agent to get its description
+            agent_instance = AGENT_REGISTRY[agent_name]()
+            help_text += f"  {alias:<12} - {agent_instance.description}\n"
+    return help_text
 
 # --- Agent Factory Function ---
 def get_agent(agent_name: str, agent_capabilities: List[Dict[str, Any]] = None) -> BaseAgent:

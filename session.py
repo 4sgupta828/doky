@@ -7,6 +7,7 @@ from typing import Optional
 from orchestrator import Orchestrator
 from interfaces.collaboration_ui import CollaborationUI, Style
 from core.models import AgentResponse
+from agents import AGENT_ALIASES, get_agent_help
 
 # Get a logger instance for this module
 logger = logging.getLogger(__name__)
@@ -43,7 +44,7 @@ class InteractiveSession:
 
         while True:
             try:
-                user_input = self.ui.prompt_for_input("Your goal")
+                user_input = self.ui.prompt_for_input("Your command")
                 if user_input.lower() in ["exit", "quit"]:
                     self.ui.display_system_message("Session terminated. Goodbye!")
                     break
@@ -51,8 +52,13 @@ class InteractiveSession:
                 if not user_input:
                     continue
 
-                self._handle_user_command(user_input)
-                self.ui.display_status(self.global_context, "Ready for your next goal.")
+                # --- COMMAND DISPATCHER ---
+                if user_input.startswith('@'):
+                    self._handle_direct_command(user_input)
+                else:
+                    self._handle_goal_command(user_input)
+
+                self.ui.display_status(self.global_context, "Ready for your next command.")
 
             except KeyboardInterrupt:
                 self.ui.display_system_message("\nSession interrupted by user. Goodbye!")
@@ -61,7 +67,7 @@ class InteractiveSession:
                 logger.critical("A critical error occurred in the session loop.", exc_info=True)
                 self.ui.display_system_message(f"A fatal error occurred: {e}", is_error=True)
 
-    def _handle_user_command(self, goal: str):
+    def _handle_goal_command(self, goal: str):
         """
         Orchestrates the plan, confirm, and execute stages, including a
         refinement loop for the user to perfect the plan.
@@ -115,6 +121,30 @@ class InteractiveSession:
         final_status = self.orchestrator.execute_plan()
         self.ui.display_system_message(f"Plan execution finished. {final_status}")
 
+    def _handle_direct_command(self, user_input: str):
+        """Parses and executes a direct agent command (e.g., '@coder write a function')."""
+        parts = user_input.strip().split(maxsplit=1)
+        alias = parts[0]
+        goal = parts[1] if len(parts) > 1 else ""
+
+        if alias == "@help":
+            help_text = get_agent_help()
+            self.ui.display_help(help_text)
+            return
+
+        agent_name = AGENT_ALIASES.get(alias)
+        if not agent_name:
+            self.ui.display_system_message(f"Unknown command '{alias}'. Type '@help' to see available commands.", is_error=True)
+            return
+            
+        if not goal:
+            self.ui.display_system_message(f"Please provide a goal for the {agent_name}.", is_error=True)
+            return
+
+        self.ui.display_system_message(f"Directly invoking {agent_name}...")
+        response = self.orchestrator.execute_single_task(goal, agent_name)
+        self.ui.display_direct_command_result(agent_name, response)
+
 
 # --- Self-Testing Block ---
 if __name__ == "__main__":
@@ -149,7 +179,7 @@ if __name__ == "__main__":
             self.mock_ui.present_plan_for_approval.return_value = "approve"
             self.mock_orchestrator.execute_plan.return_value = "Plan executed successfully."
             
-            self.session._handle_user_command("build an api")
+            self.session._handle_goal_command("build an api")
             
             self.mock_orchestrator.plan_mission.assert_called_once_with("build an api")
             self.mock_ui.present_plan_for_approval.assert_called_once()
@@ -161,7 +191,7 @@ if __name__ == "__main__":
             self.mock_orchestrator.plan_mission.return_value = AgentResponse(success=True, message="Plan created")
             self.mock_ui.present_plan_for_approval.return_value = "cancel"
             
-            self.session._handle_user_command("build an api")
+            self.session._handle_goal_command("build an api")
 
             self.mock_orchestrator.plan_mission.assert_called_once_with("build an api")
             self.mock_ui.present_plan_for_approval.assert_called_once()
@@ -182,7 +212,7 @@ if __name__ == "__main__":
             self.mock_orchestrator.refine_mission_plan.return_value = AgentResponse(success=True, message="Plan refined with linting step.")
             self.mock_orchestrator.execute_plan.return_value = "Plan executed successfully."
 
-            self.session._handle_user_command("build an api")
+            self.session._handle_goal_command("build an api")
             
             # Verify the flow
             self.assertEqual(self.mock_orchestrator.plan_mission.call_count, 1) # Initial plan

@@ -130,6 +130,28 @@ class Orchestrator:
              return "Plan concluded with pending tasks due to a deadlock."
         return "Plan executed successfully."
 
+    def execute_single_task(self, goal: str, agent_name: str) -> AgentResponse:
+        """
+        Creates and executes a single, standalone TaskNode immediately.
+        This is used for direct user commands that bypass the main plan.
+        """
+        if agent_name not in self.agent_registry:
+            return AgentResponse(success=False, message=f"Agent '{agent_name}' not found.")
+
+        # Create a one-off task for this command
+        single_task = TaskNode(goal=goal, assigned_agent=agent_name)
+        
+        # We can reuse the core invocation logic
+        response = self._invoke_agent(single_task)
+        
+        # Log the result for transparency
+        status = "succeeded" if response.success else "failed"
+        self.global_context.log_event(
+            f"direct_command_{status}",
+            {"agent": agent_name, "goal": goal, "message": response.message}
+        )
+        return response
+
     def _run_main_loop(self):
         """
         The core execution loop that processes the TaskGraph. It continuously finds

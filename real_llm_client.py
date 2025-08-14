@@ -10,28 +10,34 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
+class ContextTooLargeError(Exception):
+    """Raised when the context exceeds the configured limits."""
+    pass
+
 class RealLLMClient:
     """
     A real LLM client that can integrate with OpenAI, Anthropic, or other providers.
     This replaces the placeholder LLMClient classes throughout the codebase.
     """
     
-    def __init__(self, provider: str = "openai", model: Optional[str] = None):
+    def __init__(self, provider: str = "openai", model: Optional[str] = None, max_context_tokens: int = 50000):
         """
         Initialize the LLM client with a specific provider.
         
         Args:
             provider: The LLM provider ("openai", "anthropic", etc.)
             model: The specific model to use (defaults to reasonable choices)
+            max_context_tokens: Maximum tokens allowed in prompt context (default: 50K)
         """
         self.provider = provider.lower()
         self.model = model
         self._client = None
+        self.max_context_tokens = max_context_tokens
         
         # Set default models based on provider
         if not self.model:
             if self.provider == "openai":
-                self.model = "gpt-4o"  # Default to GPT-4o
+                self.model = "gpt-5"  # Default to GPT-5
             elif self.provider == "anthropic":
                 self.model = "claude-3-haiku-20240307"  # Fast and efficient
             else:
@@ -63,6 +69,65 @@ class RealLLMClient:
             logger.error(f"Failed to initialize {self.provider} client: {e}")
             raise
     
+    def _estimate_token_count(self, text: str) -> int:
+        """
+        Estimate token count for a given text.
+        Uses a rough approximation of 4 characters per token.
+        """
+        return len(text) // 4
+    
+    def _validate_context_size(self, prompt: str) -> None:
+        """
+        Validate that the prompt doesn't exceed context limits.
+        
+        Args:
+            prompt: The input prompt to validate
+            
+        Raises:
+            ContextTooLargeError: If prompt exceeds limits
+        """
+        estimated_tokens = self._estimate_token_count(prompt)
+        
+        if estimated_tokens > self.max_context_tokens:
+            # Analyze what's making the context large
+            lines = prompt.split('\n')
+            
+            current_section = "unknown"
+            section_sizes = {}
+            
+            for line in lines:
+                if line.strip().startswith('**') and line.strip().endswith(':**'):
+                    current_section = line.strip().replace('*', '').replace(':', '').lower()
+                    section_sizes[current_section] = 0
+                
+                if current_section in section_sizes:
+                    section_sizes[current_section] += len(line)
+            
+            # Sort sections by size
+            large_sections = sorted(
+                [(section, size) for section, size in section_sizes.items() if size > 5000],
+                key=lambda x: x[1], 
+                reverse=True
+            )
+            
+            error_details = f"""
+Context size limit exceeded!
+- Estimated tokens: {estimated_tokens:,}
+- Max allowed: {self.max_context_tokens:,}
+- Prompt length: {len(prompt):,} characters
+
+Large sections contributing to context:
+"""
+            for section, size in large_sections[:5]:  # Show top 5
+                error_details += f"- {section}: {size:,} characters ({size//4:,} est. tokens)\n"
+            
+            if not large_sections:
+                error_details += "- Unable to identify specific sections\n"
+            
+            error_details += f"\nSuggestions:\n- Reduce existing code context\n- Simplify technical specifications\n- Break down the task into smaller pieces"
+            
+            raise ContextTooLargeError(error_details)
+    
     def invoke(self, prompt: str, max_tokens: int = 1000, temperature: float = 0.1) -> str:
         """
         Invoke the LLM with a prompt and return the response.
@@ -74,7 +139,13 @@ class RealLLMClient:
             
         Returns:
             The LLM's text response
+            
+        Raises:
+            ContextTooLargeError: If prompt exceeds context limits
         """
+        # Validate context size before making the call
+        self._validate_context_size(prompt)
+        
         try:
             if self.provider == "openai":
                 response = self._client.chat.completions.create(
@@ -110,7 +181,13 @@ class RealLLMClient:
             
         Returns:
             The LLM's JSON response as a string
+            
+        Raises:
+            ContextTooLargeError: If prompt exceeds context limits
         """
+        # Validate context size before making the call
+        self._validate_context_size(prompt)
+        
         try:
             if self.provider == "openai":
                 # OpenAI function calling
@@ -162,20 +239,20 @@ class RealLLMClient:
             raise
 
 # Convenience function to create a client
-def create_llm_client(provider: str = None, model: str = None) -> RealLLMClient:
+def create_llm_client(provider: str = None, model: str = None, max_context_tokens: int = 50000) -> RealLLMClient:
     """
     Create an LLM client, trying different providers based on available API keys.
     """
     if provider:
-        return RealLLMClient(provider=provider, model=model)
+        return RealLLMClient(provider=provider, model=model, max_context_tokens=max_context_tokens)
     
     # Auto-detect based on available API keys - prefer Anthropic due to quota
     if os.getenv("ANTHROPIC_API_KEY"):
         logger.info("Using Anthropic client (ANTHROPIC_API_KEY found)")
-        return RealLLMClient(provider="anthropic", model=model)
+        return RealLLMClient(provider="anthropic", model=model, max_context_tokens=max_context_tokens)
     elif os.getenv("OPENAI_API_KEY"):
         logger.info("Using OpenAI client (OPENAI_API_KEY found)")
-        return RealLLMClient(provider="openai", model=model)
+        return RealLLMClient(provider="openai", model=model, max_context_tokens=max_context_tokens)
     else:
         raise ValueError(
             "No API keys found. Please set OPENAI_API_KEY or ANTHROPIC_API_KEY environment variable."
