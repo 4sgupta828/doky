@@ -5,7 +5,6 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from core.models import TaskGraph  # Depends on Tier 1 models
-from utils.git_manager import GitWorkspaceManager  # Depends on Tier 1 Git manager
 
 # Get a logger instance for this module.
 logger = logging.getLogger(__name__)
@@ -39,6 +38,9 @@ class GlobalContext:
         Args:
             workspace_path: The file path for the coding workspace.
         """
+        # Import here to avoid circular import
+        from utils.git_manager import GitWorkspaceManager
+        
         self.task_graph = TaskGraph()
         self.workspace: WorkspaceManager = GitWorkspaceManager(workspace_path)
         self.artifacts: Dict[str, Any] = {}

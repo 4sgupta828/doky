@@ -21,28 +21,66 @@ class Orchestrator:
     logic itself, acting purely as a conductor.
     """
 
-    def __init__(self):
+    def __init__(self, workspace_path: str = "./mission_workspace"):
         """
         Initializes the Orchestrator and all core components of the agent collective.
         This setup phase is critical for establishing the mission's environment.
+        
+        Args:
+            workspace_path: The directory path for the mission's workspace.
         """
-        self.global_context = GlobalContext()
+        # Load environment variables from .env file
+        try:
+            from dotenv import load_dotenv
+            load_dotenv()
+        except ImportError:
+            # Manual loading if python-dotenv not available
+            import os
+            from pathlib import Path
+            env_file = Path(".env")
+            if env_file.exists():
+                for line in env_file.read_text().strip().split('\n'):
+                    if '=' in line and not line.startswith('#'):
+                        key, value = line.split('=', 1)
+                        os.environ[key.strip()] = value.strip()
+        
+        # Initialize real LLM client
+        from real_llm_client import create_llm_client
+        self.llm_client = create_llm_client()
+        logging.info(f"Initialized LLM client: {self.llm_client.provider} with model {self.llm_client.model}")
+        
+        self.global_context = GlobalContext(workspace_path=workspace_path)
         self.adaptive_engine = AdaptiveEngine()
         self.agent_registry: Dict[str, BaseAgent] = self._load_agents()
         logging.info(f"Orchestrator initialized with agents: {list(self.agent_registry.keys())}")
 
     def _load_agents(self) -> Dict[str, BaseAgent]:
-        """Loads agent instances from the central agent registry."""
+        """Loads agent instances from the central agent registry with real LLM client."""
         registry = {}
         for agent_name in AGENT_REGISTRY:
             try:
-                # We need to pass the registry to the planner so it knows what tools are available.
+                agent_class = AGENT_REGISTRY[agent_name]
+                
                 if agent_name == "PlannerAgent":
-                    # Pass a dictionary of agent capabilities to the planner.
-                    all_capabilities = {name: cls().get_capabilities() for name, cls in AGENT_REGISTRY.items()}
-                    registry[agent_name] = get_agent(agent_name, agent_capabilities=all_capabilities)
+                    # PlannerAgent needs capabilities of other agents
+                    all_capabilities = []
+                    for name, cls in AGENT_REGISTRY.items():
+                        if name != "PlannerAgent":
+                            temp_agent = cls()
+                            all_capabilities.append(temp_agent.get_capabilities())
+                    
+                    registry[agent_name] = agent_class(
+                        agent_capabilities=all_capabilities, 
+                        llm_client=self.llm_client
+                    )
                 else:
-                    registry[agent_name] = get_agent(agent_name)
+                    # Try to inject LLM client into other agents
+                    try:
+                        registry[agent_name] = agent_class(llm_client=self.llm_client)
+                    except TypeError:
+                        # Some agents might not accept llm_client parameter
+                        registry[agent_name] = agent_class()
+                        
             except Exception as e:
                 logging.error(f"Failed to load agent '{agent_name}': {e}", exc_info=True)
         return registry

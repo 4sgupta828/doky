@@ -1,1 +1,25 @@
 .env
+
+# Python cache files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+test_env/
+venv/
+env/
+
+# Log files
+logs/
+*.log
+
+# Temporary test workspaces
+*workspace_temp/
+mission_workspace/
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
