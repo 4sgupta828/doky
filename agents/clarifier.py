@@ -73,10 +73,31 @@ class IntentClarificationAgent(BaseAgent):
         """
         logger.info(f"ClarificationAgent executing with goal: '{goal}'")
 
+        # Define JSON schema for guaranteed structured response
+        questions_schema = {
+            "type": "object",
+            "properties": {
+                "questions": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Array of clarification questions to ask the user"
+                }
+            },
+            "required": ["questions"]
+        }
+
         try:
             prompt = self._build_prompt(goal)
-            response_str = self.llm_client.invoke(prompt)
-            questions_to_ask = json.loads(response_str)
+            
+            # Use function calling for guaranteed JSON response
+            if hasattr(self.llm_client, 'invoke_with_schema'):
+                response_str = self.llm_client.invoke_with_schema(prompt, questions_schema)
+            else:
+                # Fallback to regular invoke for backward compatibility
+                response_str = self.llm_client.invoke(prompt)
+            
+            response_data = json.loads(response_str)
+            questions_to_ask = response_data.get("questions", []) if isinstance(response_data, dict) else response_data
 
             if not isinstance(questions_to_ask, list):
                 raise TypeError("LLM response for questions was not a valid list.")

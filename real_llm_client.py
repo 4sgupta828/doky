@@ -98,6 +98,69 @@ class RealLLMClient:
             logger.error(f"LLM invocation failed: {e}")
             raise
 
+    def invoke_with_schema(self, prompt: str, schema: dict, max_tokens: int = 1000, temperature: float = 0.1) -> str:
+        """
+        Invoke the LLM with function calling to guarantee JSON response matching schema.
+        
+        Args:
+            prompt: The input prompt for the LLM
+            schema: JSON schema for the expected response structure
+            max_tokens: Maximum tokens in the response
+            temperature: Sampling temperature (0.0 to 1.0)
+            
+        Returns:
+            The LLM's JSON response as a string
+        """
+        try:
+            if self.provider == "openai":
+                # OpenAI function calling
+                function_def = {
+                    "name": "respond",
+                    "description": "Respond with the requested structured data",
+                    "parameters": schema
+                }
+                
+                response = self._client.chat.completions.create(
+                    model=self.model,
+                    messages=[{"role": "user", "content": prompt}],
+                    functions=[function_def],
+                    function_call={"name": "respond"},
+                    max_tokens=max_tokens,
+                    temperature=temperature
+                )
+                
+                function_call = response.choices[0].message.function_call
+                return function_call.arguments
+                
+            elif self.provider == "anthropic":
+                # Anthropic tool calling
+                tool_def = {
+                    "name": "respond",
+                    "description": "Respond with the requested structured data",
+                    "input_schema": schema
+                }
+                
+                response = self._client.messages.create(
+                    model=self.model,
+                    max_tokens=max_tokens,
+                    temperature=temperature,
+                    tools=[tool_def],
+                    tool_choice={"type": "tool", "name": "respond"},
+                    messages=[{"role": "user", "content": prompt}]
+                )
+                
+                # Extract tool use from response
+                for content_block in response.content:
+                    if hasattr(content_block, 'type') and content_block.type == 'tool_use':
+                        return json.dumps(content_block.input)
+                
+                # Fallback if no tool use found
+                raise ValueError("No tool use found in Anthropic response")
+                
+        except Exception as e:
+            logger.error(f"LLM schema invocation failed: {e}")
+            raise
+
 # Convenience function to create a client
 def create_llm_client(provider: str = None, model: str = None) -> RealLLMClient:
     """

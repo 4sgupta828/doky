@@ -110,9 +110,40 @@ class ChiefQualityOfficerAgent(BaseAgent):
             return AgentResponse(success=True, message="Application code files were found, but they are all empty.")
 
         # 2. Invoke the LLM to perform the audit.
+        # Define JSON schema for guaranteed structured response
+        quality_schema = {
+            "type": "object",
+            "properties": {
+                "issues": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "severity": {"type": "string"},
+                            "category": {"type": "string"},
+                            "file": {"type": "string"},
+                            "line": {"type": "number"},
+                            "message": {"type": "string"},
+                            "fix": {"type": "string"}
+                        },
+                        "required": ["severity", "category", "file", "message"]
+                    },
+                    "description": "Array of quality issues found in the code"
+                }
+            },
+            "required": ["issues"]
+        }
+
         try:
             prompt = self._build_prompt(all_code)
-            llm_response_str = self.llm_client.invoke(prompt)
+            
+            # Use function calling for guaranteed JSON response
+            if hasattr(self.llm_client, 'invoke_with_schema'):
+                llm_response_str = self.llm_client.invoke_with_schema(prompt, quality_schema)
+            else:
+                # Fallback to regular invoke for backward compatibility
+                llm_response_str = self.llm_client.invoke(prompt)
+            
             quality_report = json.loads(llm_response_str)
 
             if "issues" not in quality_report or not isinstance(quality_report["issues"], list):

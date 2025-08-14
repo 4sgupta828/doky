@@ -85,9 +85,32 @@ class DebuggingAgent(BaseAgent):
             return AgentResponse(success=False, message=msg)
 
         # 2. Invoke the LLM to perform the analysis.
+        # Define JSON schema for guaranteed structured response
+        debug_schema = {
+            "type": "object",
+            "properties": {
+                "root_cause_analysis": {
+                    "type": "string",
+                    "description": "Detailed analysis of the root cause"
+                },
+                "suggested_fix_diff": {
+                    "type": "string", 
+                    "description": "Suggested fix in diff format"
+                }
+            },
+            "required": ["root_cause_analysis", "suggested_fix_diff"]
+        }
+
         try:
             prompt = self._build_prompt(failed_report, code_context)
-            llm_response_str = self.llm_client.invoke(prompt)
+            
+            # Use function calling for guaranteed JSON response
+            if hasattr(self.llm_client, 'invoke_with_schema'):
+                llm_response_str = self.llm_client.invoke_with_schema(prompt, debug_schema)
+            else:
+                # Fallback to regular invoke for backward compatibility
+                llm_response_str = self.llm_client.invoke(prompt)
+            
             debug_results = json.loads(llm_response_str)
 
             analysis = debug_results.get("root_cause_analysis")

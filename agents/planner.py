@@ -126,8 +126,48 @@ class PlannerAgent(BaseAgent):
         context_summary = {"files_in_workspace": context.workspace.list_files()}
         prompt = self._build_prompt(goal, context_summary)
 
+        # Define JSON schema for guaranteed structured response
+        task_graph_schema = {
+            "type": "object",
+            "properties": {
+                "nodes": {
+                    "type": "object",
+                    "patternProperties": {
+                        "^task_.*": {
+                            "type": "object",
+                            "properties": {
+                                "task_id": {"type": "string"},
+                                "goal": {"type": "string"},
+                                "assigned_agent": {"type": "string"},
+                                "dependencies": {
+                                    "type": "array",
+                                    "items": {"type": "string"}
+                                },
+                                "input_artifact_keys": {
+                                    "type": "array",
+                                    "items": {"type": "string"}
+                                },
+                                "output_artifact_keys": {
+                                    "type": "array",
+                                    "items": {"type": "string"}
+                                }
+                            },
+                            "required": ["task_id", "goal", "assigned_agent"]
+                        }
+                    }
+                }
+            },
+            "required": ["nodes"]
+        }
+
         try:
-            llm_response_str = self.llm_client.invoke(prompt)
+            # Use function calling for guaranteed JSON response
+            if hasattr(self.llm_client, 'invoke_with_schema'):
+                llm_response_str = self.llm_client.invoke_with_schema(prompt, task_graph_schema)
+            else:
+                # Fallback to regular invoke for backward compatibility
+                llm_response_str = self.llm_client.invoke(prompt)
+            
             plan_data = json.loads(llm_response_str)
 
             # Use Pydantic to parse and validate the entire structure.

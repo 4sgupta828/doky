@@ -105,9 +105,25 @@ class TestGenerationAgent(BaseAgent):
         if not code_to_test:
             return AgentResponse(success=True, message="No application code found to test.")
 
+        # Define JSON schema for guaranteed structured response
+        test_generation_schema = {
+            "type": "object",
+            "patternProperties": {
+                ".*": {"type": "string"}
+            },
+            "description": "Dictionary mapping test file paths to their test code content"
+        }
+
         try:
             prompt = self._build_prompt(spec, code_to_test, test_type)
-            llm_response_str = self.llm_client.invoke(prompt)
+            
+            # Use function calling for guaranteed JSON response
+            if hasattr(self.llm_client, 'invoke_with_schema'):
+                llm_response_str = self.llm_client.invoke_with_schema(prompt, test_generation_schema)
+            else:
+                # Fallback to regular invoke for backward compatibility
+                llm_response_str = self.llm_client.invoke(prompt)
+            
             generated_tests_map = json.loads(llm_response_str)
             if not isinstance(generated_tests_map, dict):
                 raise ValueError("LLM response is not a valid dictionary of test files.")

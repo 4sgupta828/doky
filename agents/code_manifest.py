@@ -74,9 +74,29 @@ class CodeManifestAgent(BaseAgent):
             logger.error(msg)
             return AgentResponse(success=False, message=msg)
         
+        # Define JSON schema for guaranteed structured response
+        manifest_schema = {
+            "type": "object",
+            "properties": {
+                "files_to_create": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "List of file paths to create"
+                }
+            },
+            "required": ["files_to_create"]
+        }
+
         try:
             prompt = self._build_prompt(tech_spec)
-            manifest_json_str = self.llm_client.invoke(prompt)
+            
+            # Use function calling for guaranteed JSON response
+            if hasattr(self.llm_client, 'invoke_with_schema'):
+                manifest_json_str = self.llm_client.invoke_with_schema(prompt, manifest_schema)
+            else:
+                # Fallback to regular invoke for backward compatibility
+                manifest_json_str = self.llm_client.invoke(prompt)
+            
             manifest_data = json.loads(manifest_json_str)
 
             if "files_to_create" not in manifest_data or not isinstance(manifest_data["files_to_create"], list):

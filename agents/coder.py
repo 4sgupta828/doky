@@ -105,9 +105,25 @@ class CodeGenerationAgent(BaseAgent):
                 existing_code[file_path] = content
 
         # 3. Construct the prompt and invoke the LLM.
+        # Define JSON schema for guaranteed structured response
+        code_generation_schema = {
+            "type": "object",
+            "patternProperties": {
+                ".*": {"type": "string"}
+            },
+            "description": "Dictionary mapping file paths to their code content"
+        }
+
         try:
             prompt = self._build_prompt(files_to_generate, tech_spec, existing_code)
-            llm_response_str = self.llm_client.invoke(prompt)
+            
+            # Use function calling for guaranteed JSON response
+            if hasattr(self.llm_client, 'invoke_with_schema'):
+                llm_response_str = self.llm_client.invoke_with_schema(prompt, code_generation_schema)
+            else:
+                # Fallback to regular invoke for backward compatibility
+                llm_response_str = self.llm_client.invoke(prompt)
+            
             generated_code_map = json.loads(llm_response_str)
 
             if not isinstance(generated_code_map, dict):
