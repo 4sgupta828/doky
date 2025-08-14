@@ -1,22 +1,27 @@
 # core/context.py
-from .models import TaskGraph
-from typing import Any, Dict
-import logging
 import json
+import logging
+from pathlib import Path
+from typing import Any, Dict, List, Optional
 
-# from utils.git_manager import GitWorkspaceManager
+from core.models import TaskGraph  # Depends on Tier 1 models
+from utils.git_manager import GitWorkspaceManager  # Depends on Tier 1 Git manager
+
+# Get a logger instance for this module.
+logger = logging.getLogger(__name__)
 
 class WorkspaceManager:
     """
-    An abstract interface for managing the state of the code workspace.
-    This could be implemented using Git, a virtual file system, or other versioning tools.
-    Its purpose is to enable safe, reversible file operations, which is key for backtracking.
+    This is an abstract base class that defines the interface for managing the
+    state of the code workspace. The GitWorkspaceManager is a concrete implementation
+    of this contract. This abstract definition allows for future flexibility, such as
+    a virtual in-memory workspace for testing.
     """
-    def get_file_content(self, path: str) -> str: pass
-    def write_file_content(self, path: str, content: str, task_id: str): pass
-    def list_files(self, path: str = ".") -> list[str]: pass
-    def revert_changes(self, task_id: str): pass
-    def get_diff(self) -> str: pass
+    def get_file_content(self, path: str) -> Optional[str]: raise NotImplementedError
+    def write_file_content(self, path: str, content: str, task_id: str): raise NotImplementedError
+    def list_files(self, path: str = ".") -> List[str]: raise NotImplementedError
+    def revert_changes(self, task_id: str): raise NotImplementedError
+    def get_diff(self) -> str: raise NotImplementedError
 
 
 class GlobalContext:
@@ -27,48 +32,184 @@ class GlobalContext:
     as the entire state of the mission can be inspected or even serialized at any point.
     """
 
-    def __init__(self):
+    def __init__(self, workspace_path: str = "./mission_workspace"):
+        """
+        Initializes the GlobalContext.
+
+        Args:
+            workspace_path: The file path for the coding workspace.
+        """
         self.task_graph = TaskGraph()
-        # self.workspace = GitWorkspaceManager("./mission_workspace")
+        self.workspace: WorkspaceManager = GitWorkspaceManager(workspace_path)
         self.artifacts: Dict[str, Any] = {}
         self.mission_log: List[Dict[str, Any]] = []
-        logging.info("GlobalContext initialized.")
+        self.log_event(
+            "context_initialized",
+            {"workspace_path": workspace_path, "message": "GlobalContext is ready."}
+        )
 
     def add_artifact(self, key: str, value: Any, source_task_id: str):
         """
         Adds a new artifact (data, spec, code, etc.) to the central repository.
+        This method is the primary way agents share information.
 
         Args:
             key: A unique, descriptive key for the artifact (e.g., "technical_spec.md").
-            value: The data to be stored.
+            value: The data to be stored. Can be any serializable type.
             source_task_id: The ID of the task that produced this artifact.
         """
-        logging.info(f"Artifact '{key}' added by Task '{source_task_id}'.")
+        if key in self.artifacts:
+            logger.warning(f"Artifact key '{key}' already exists. It will be overwritten by task '{source_task_id}'.")
+        
         self.artifacts[key] = value
         self.log_event(
-            "artifact_added", 
-            {"key": key, "source": source_task_id, "type": str(type(value))}
+            "artifact_added",
+            {"key": key, "source_task_id": source_task_id, "type": str(type(value).__name__)}
         )
 
-    def get_artifact(self, key: str) -> Any:
-        """Retrieves an artifact by its key."""
-        return self.artifacts.get(key)
-    
-    def log_event(self, event_type: str, details: Dict):
-        """Records a significant event in the mission log for transparency and debugging."""
-        self.mission_log.append({"event": event_type, "details": details})
-
-    def save_snapshot(self, path: str):
+    def get_artifact(self, key: str, default: Any = None) -> Any:
         """
-        Saves the current state of the GlobalContext to a file.
+        Safely retrieves an artifact by its key.
+
+        Args:
+            key: The key of the artifact to retrieve.
+            default: The value to return if the key is not found.
+
+        Returns:
+            The artifact's value, or the default value if not found.
+        """
+        if key not in self.artifacts:
+            logger.warning(f"Artifact with key '{key}' not found. Returning default value.")
+        return self.artifacts.get(key, default)
+    
+    def log_event(self, event_type: str, details: Dict[str, Any]):
+        """
+        Records a significant event in the mission log for transparency and debugging.
+
+        Args:
+            event_type: A string identifier for the type of event (e.g., "task_started").
+            details: A dictionary containing relevant data about the event.
+        """
+        log_entry = {"event": event_type, "details": details}
+        self.mission_log.append(log_entry)
+        logger.debug(f"Logged event: {log_entry}")
+
+    def save_snapshot(self, file_path: str):
+        """
+        Saves the current state of the GlobalContext to a JSON file.
         This is an invaluable debugging tool, allowing developers to capture the exact
         state of a mission at the moment of failure for later analysis.
+
+        Args:
+            file_path: The path to save the snapshot file.
         """
-        # state_data = {
-        #     "task_graph": self.task_graph, # Requires serialization for dataclasses
-        #     "artifacts": self.artifacts,   # Requires serialization for complex objects
-        #     "mission_log": self.mission_log
-        # }
-        # with open(path, 'w') as f:
-        #     json.dump(state_data, f, indent=2)
-        logging.info(f"Debug snapshot saved to {path}")
+        logger.info(f"Saving debug snapshot to: {file_path}")
+        snapshot_path = Path(file_path)
+        snapshot_path.parent.mkdir(parents=True, exist_ok=True)
+
+        try:
+            state_data = {
+                # Pydantic's model_dump is used for safe serialization to JSON-compatible types.
+                "task_graph": self.task_graph.model_dump(mode='json'),
+                "artifacts": {k: str(v)[:500] + '...' if isinstance(v, str) else type(v).__name__ for k, v in self.artifacts.items()},
+                "mission_log": self.mission_log
+            }
+            with open(snapshot_path, 'w', encoding='utf-8') as f:
+                json.dump(state_data, f, indent=2)
+            logger.info("Debug snapshot saved successfully.")
+        except TypeError as e:
+            logger.error(f"Failed to serialize context to JSON. Check for non-serializable artifacts. Error: {e}", exc_info=True)
+        except Exception as e:
+            logger.error(f"An unexpected error occurred while saving snapshot: {e}", exc_info=True)
+
+
+# --- Self-Testing Block ---
+# This block validates the functionality of the GlobalContext.
+# To run this test: `python core/context.py`
+if __name__ == "__main__":
+    import shutil
+    from utils.logger import setup_logger
+    from core.models import TaskNode
+
+    # Setup a clean testing environment
+    TEST_WORKSPACE = "./temp_context_test_ws"
+    if Path(TEST_WORKSPACE).exists():
+        shutil.rmtree(TEST_WORKSPACE)
+    
+    setup_logger(default_level=logging.DEBUG)
+
+    print("\n--- Testing GlobalContext ---")
+
+    # 1. Test Initialization
+    print("\n[1] Testing context initialization...")
+    try:
+        context = GlobalContext(workspace_path=TEST_WORKSPACE)
+        assert Path(TEST_WORKSPACE).exists()
+        assert len(context.mission_log) == 1  # Initial log event
+        logger.info("Context initialization test passed.")
+    except Exception as e:
+        logger.error("Context initialization failed.", exc_info=True)
+        exit()
+
+    # 2. Test Artifact Management
+    print("\n[2] Testing artifact management...")
+    task1 = TaskNode(goal="Create a spec", assigned_agent="SpecGen")
+    spec_content = {"api_version": "v1", "endpoints": ["/users"]}
+    context.add_artifact(
+        key="tech_spec.json",
+        value=spec_content,
+        source_task_id=task1.task_id
+    )
+    
+    retrieved_spec = context.get_artifact("tech_spec.json")
+    assert retrieved_spec == spec_content
+    logger.info("Artifact addition and retrieval successful.")
+
+    # Test retrieving a non-existent artifact
+    non_existent = context.get_artifact("non_existent.key", default="not_found")
+    assert non_existent == "not_found"
+    logger.info("Retrieving non-existent artifact with default value successful.")
+    
+    # Test overwriting an artifact
+    context.add_artifact("tech_spec.json", {"api_version": "v2"}, "task_002")
+    assert context.get_artifact("tech_spec.json")["api_version"] == "v2"
+    logger.info("Artifact overwriting successful.")
+
+    # 3. Test Event Logging
+    print("\n[3] Testing event logging...")
+    initial_log_count = len(context.mission_log)
+    context.log_event("test_event", {"data": "some_value"})
+    assert len(context.mission_log) == initial_log_count + 1
+    assert context.mission_log[-1]["event"] == "test_event"
+    logger.info("Event logging successful.")
+
+    # 4. Test Workspace Interaction (via the manager)
+    print("\n[4] Testing workspace interaction...")
+    try:
+        task2 = TaskNode(goal="Write code", assigned_agent="Coder")
+        context.workspace.write_file_content("app.py", "print('hello')", task2.task_id)
+        file_list = context.workspace.list_files()
+        assert "app.py" in file_list
+        logger.info("Workspace interaction test passed.")
+    except Exception as e:
+        logger.error("Workspace interaction test failed.", exc_info=True)
+
+    # 5. Test State Snapshot
+    print("\n[5] Testing state snapshot...")
+    snapshot_file = Path("./temp_context_test_ws/snapshot.json")
+    try:
+        context.save_snapshot(str(snapshot_file))
+        assert snapshot_file.exists()
+        with open(snapshot_file, 'r') as f:
+            data = json.load(f)
+            assert "task_graph" in data
+            assert "tech_spec.json" in data["artifacts"]
+        logger.info("State snapshot test passed.")
+    except Exception as e:
+        logger.error("State snapshot test failed.", exc_info=True)
+
+    # Clean up the test directory
+    shutil.rmtree(TEST_WORKSPACE)
+    logger.info(f"Cleaned up test directory: {TEST_WORKSPACE}")
+
+    print("\n--- All GlobalContext Tests Passed Successfully ---")
