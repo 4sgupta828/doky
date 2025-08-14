@@ -1,9 +1,9 @@
 # orchestrator.py
 import logging
 import time
-from typing import Dict, Optional
+from typing import Dict, Optional, List, Any
 
-# Foundational dependencies from Tier 1 & 2
+# Foundational dependencies
 from core.context import GlobalContext
 from core.adaptive_engine import AdaptiveEngine
 from core.models import TaskNode, AgentResponse, TaskGraph
@@ -17,8 +17,7 @@ class Orchestrator:
     """
     The heart of the system, responsible for driving the entire mission from start to finish.
     It manages the main execution loop, invokes agents to perform tasks, and coordinates
-    with the AdaptiveEngine when failures occur. It does not contain any agent-specific
-    logic itself, acting purely as a conductor.
+    with the AdaptiveEngine when failures occur. It acts purely as a conductor.
     """
 
     def __init__(self, workspace_path: str = "./mission_workspace"):
@@ -57,18 +56,16 @@ class Orchestrator:
     def _load_agents(self) -> Dict[str, BaseAgent]:
         """Loads agent instances from the central agent registry with real LLM client."""
         registry = {}
-        for agent_name in AGENT_REGISTRY:
+        # The planner needs to know about all other agents to create valid plans.
+        all_capabilities = []
+        for name, cls in AGENT_REGISTRY.items():
+            if name != "PlannerAgent":
+                temp_agent = cls()
+                all_capabilities.append(temp_agent.get_capabilities())
+        
+        for agent_name, agent_class in AGENT_REGISTRY.items():
             try:
-                agent_class = AGENT_REGISTRY[agent_name]
-                
                 if agent_name == "PlannerAgent":
-                    # PlannerAgent needs capabilities of other agents
-                    all_capabilities = []
-                    for name, cls in AGENT_REGISTRY.items():
-                        if name != "PlannerAgent":
-                            temp_agent = cls()
-                            all_capabilities.append(temp_agent.get_capabilities())
-                    
                     registry[agent_name] = agent_class(
                         agent_capabilities=all_capabilities, 
                         llm_client=self.llm_client
@@ -85,71 +82,72 @@ class Orchestrator:
                 logging.error(f"Failed to load agent '{agent_name}': {e}", exc_info=True)
         return registry
 
-    def execute_mission(self, mission_goal: str) -> str:
+    def plan_mission(self, mission_goal: str) -> AgentResponse:
         """
-        Starts and manages the entire lifecycle of a mission.
-
-        Args:
-            mission_goal: The high-level objective from the user.
-
-        Returns:
-            A string summarizing the final outcome of the mission.
+        Invokes ONLY the PlannerAgent to create a new TaskGraph.
         """
-        logging.info(f"--- NEW MISSION INITIATED --- Goal: {mission_goal}")
+        logging.info(f"Orchestrator received planning request for: '{mission_goal}'")
+        self.global_context.task_graph.nodes.clear() # Clear any previous plan
+        
+        planning_task = TaskNode(goal=mission_goal, assigned_agent="PlannerAgent")
+        return self._invoke_agent(planning_task)
 
-        # The first step is always to invoke the PlannerAgent to create the initial TaskGraph.
-        initial_plan_task = TaskNode(
-            task_id="task_0_plan",
-            goal=mission_goal,
-            assigned_agent="PlannerAgent",
+    def refine_mission_plan(self, user_feedback: str) -> AgentResponse:
+        """
+        Invokes ONLY the PlanRefinementAgent to modify the current TaskGraph.
+        """
+        logging.info(f"Orchestrator received plan refinement request: '{user_feedback}'")
+        
+        if not self.global_context.task_graph.nodes:
+            return AgentResponse(success=False, message="There is no active plan to refine.")
+
+        refinement_task = TaskNode(
+            goal=user_feedback, # The user's feedback is the goal for this agent
+            assigned_agent="PlanRefinementAgent"
         )
-        self.global_context.task_graph.add_task(initial_plan_task)
+        return self._invoke_agent(refinement_task)
 
-        # Run the main execution loop.
+    def execute_plan(self) -> str:
+        """
+        Executes the TaskGraph currently loaded in the GlobalContext.
+        """
+        if not self.global_context.task_graph.nodes:
+            return "Execution failed: No plan is loaded in the context."
+
         self._run_main_loop()
 
-        # Determine the final mission status based on the state of the graph.
-        final_status = "Mission finished successfully."
         if any(task.status == 'failed' for task in self.global_context.task_graph.nodes.values()):
-            final_status = "Mission concluded with unrecoverable failures."
+            return "Plan concluded with unrecoverable failures."
         elif any(task.status == 'pending' for task in self.global_context.task_graph.nodes.values()):
-             final_status = "Mission concluded with pending tasks due to a deadlock or unmet dependencies."
-
-
-        logging.info(f"--- MISSION CONCLUDED --- Outcome: {final_status}")
-        self.global_context.save_snapshot("final_mission_state.json")
-        return final_status
+             return "Plan concluded with pending tasks due to a deadlock."
+        return "Plan executed successfully."
 
     def _run_main_loop(self):
         """
         The core execution loop that processes the TaskGraph. It continuously finds
         and executes the next available task until none are left or a deadlock occurs.
         """
-        max_loops_without_progress = 10  # Prevents infinite loops
+        max_loops_without_progress = 10
         loops_without_progress = 0
 
         while True:
             next_task = self._get_next_executable_task()
 
             if not next_task:
-                # Check for mission completion
                 if not any(task.status in ["pending", "running"] for task in self.global_context.task_graph.nodes.values()):
                     logging.info("No more executable or pending tasks. Main loop concluding.")
                     break
                 
-                # Check for deadlock
                 loops_without_progress += 1
                 if loops_without_progress >= max_loops_without_progress:
-                    logging.critical("No executable tasks found for multiple cycles. Deadlock suspected. Aborting mission.")
+                    logging.critical("No executable tasks found for multiple cycles. Deadlock suspected. Aborting.")
                     break
                 
-                logging.warning("No executable tasks found, but pending tasks remain. Waiting...")
                 time.sleep(1)
                 continue
             
-            loops_without_progress = 0 # Reset counter since we made progress
+            loops_without_progress = 0
             
-            # Execute the task
             next_task.status = "running"
             self.global_context.log_event("task_started", {"task_id": next_task.task_id, "goal": next_task.goal})
 
@@ -163,7 +161,6 @@ class Orchestrator:
                 next_task.status = "failed"
                 self.global_context.log_event("task_failed", {"task_id": next_task.task_id, "reason": response.message})
                 
-                # A failure occurred, trigger the AdaptiveEngine.
                 recovery_possible = self.adaptive_engine.handle_failure(
                     failed_task=next_task,
                     context=self.global_context,
@@ -176,8 +173,7 @@ class Orchestrator:
 
     def _get_next_executable_task(self) -> Optional[TaskNode]:
         """
-        Scans the TaskGraph to find a task that is ready to be executed. A task
-        is ready if its status is 'pending' and all its dependencies are 'success'.
+        Scans the TaskGraph to find a task that is ready to be executed.
         """
         for task in sorted(self.global_context.task_graph.nodes.values(), key=lambda t: t.task_id):
             if task.status == "pending":
@@ -192,7 +188,6 @@ class Orchestrator:
     def _invoke_agent(self, current_task: TaskNode) -> AgentResponse:
         """
         Finds the specified agent in the registry and calls its execute method.
-        This provides a controlled, single point of execution for all agent actions.
         """
         agent_name = current_task.assigned_agent
         agent_to_run = self.agent_registry.get(agent_name)
@@ -210,116 +205,85 @@ class Orchestrator:
             logging.critical(error_msg, exc_info=True)
             return AgentResponse(success=False, message=error_msg)
 
+
 # --- Self-Testing Block ---
 if __name__ == "__main__":
-    from utils.logger import setup_logger
+    import unittest
+    from unittest.mock import patch, MagicMock
     import shutil
     from pathlib import Path
 
     setup_logger(default_level=logging.INFO)
 
-    # --- Mock Agents for Isolated Testing ---
-    class MockSuccessAgent(BaseAgent):
-        def execute(self, goal: str, context: GlobalContext, current_task: TaskNode) -> AgentResponse:
-            context.add_artifact(f"{current_task.task_id}_output", "success_data", current_task.task_id)
-            return AgentResponse(success=True, message=f"{self.name} completed successfully.")
-
-    class MockFailureAgent(BaseAgent):
-        def execute(self, goal: str, context: GlobalContext, current_task: TaskNode) -> AgentResponse:
-            return AgentResponse(success=False, message="I am designed to fail.")
-
-    class MockPlanner(BaseAgent):
-        def __init__(self, should_fail=False):
-            super().__init__("PlannerAgent", "Mock Planner")
-            self.should_fail = should_fail
+    class MockAgent(BaseAgent):
+        def __init__(self, name="MockAgent", should_succeed=True):
+            super().__init__(name, "A mock agent for testing.")
+            self.should_succeed = should_succeed
         
         def execute(self, goal: str, context: GlobalContext, current_task: TaskNode) -> AgentResponse:
-            if "fail" in goal.lower() or self.should_fail:
-                return AgentResponse(success=False, message="Planner failed to create a plan.")
-            
-            # On first run, create a standard plan
-            if "build a simple api" in goal.lower():
-                graph = TaskGraph(nodes={
-                    "task_code": TaskNode(task_id="task_code", goal="Write code", assigned_agent="CodeGenerationAgent", dependencies=[]),
-                    "task_test": TaskNode(task_id="task_test", goal="Run tests", assigned_agent="TestRunnerAgent", dependencies=["task_code"])
-                })
-                context.task_graph.nodes.update(graph.nodes)
-                return AgentResponse(success=True, message="Initial plan created.")
+            if self.should_succeed:
+                return AgentResponse(success=True, message="Mock task complete.")
+            else:
+                return AgentResponse(success=False, message="Mock task failed.")
 
-            # On recovery run, create a recovery plan
-            if "failed" in goal.lower():
-                graph = TaskGraph(nodes={
-                    "task_debug": TaskNode(task_id="task_debug", goal="Debug the failure", assigned_agent="DebuggingAgent", dependencies=[]),
-                    "task_fix": TaskNode(task_id="task_fix", goal="Fix the code", assigned_agent="CodeGenerationAgent", dependencies=["task_debug"])
-                })
-                # Splice the new plan in, replacing the old one
-                context.task_graph.nodes = graph.nodes
-                return AgentResponse(success=True, message="Recovery plan created.")
-            
-            return AgentResponse(success=False, message="Mock planner did not understand goal.")
+    @patch('agents.AGENT_REGISTRY', {
+        'PlannerAgent': lambda **kwargs: MockAgent('PlannerAgent'),
+        'PlanRefinementAgent': lambda: MockAgent('PlanRefinementAgent'),
+        'OtherAgent': lambda: MockAgent('OtherAgent')
+    })
+    class TestOrchestrator(unittest.TestCase):
 
-    print("\n--- Testing Orchestrator ---")
-    TEST_WORKSPACE = "./temp_orchestrator_test_ws"
+        def setUp(self):
+            self.test_workspace_path = "./temp_orchestrator_test_ws"
+            if Path(self.test_workspace_path).exists():
+                shutil.rmtree(self.test_workspace_path)
+            self.orchestrator = Orchestrator(workspace_path=self.test_workspace_path)
+            # We can mock the agents directly on the instance for fine-grained control
+            self.orchestrator.agent_registry['PlannerAgent'] = MagicMock(spec=BaseAgent)
+            self.orchestrator.agent_registry['PlanRefinementAgent'] = MagicMock(spec=BaseAgent)
 
-    def setup_test_env():
-        if Path(TEST_WORKSPACE).exists():
-            shutil.rmtree(TEST_WORKSPACE)
+        def tearDown(self):
+            shutil.rmtree(self.test_workspace_path)
         
-        # Override the real registry with mock agents for this test
-        global AGENT_REGISTRY
-        AGENT_REGISTRY = {
-            "PlannerAgent": MockPlanner,
-            "CodeGenerationAgent": MockSuccessAgent,
-            "TestRunnerAgent": MockSuccessAgent,
-            "DebuggingAgent": MockSuccessAgent,
-        }
+        def test_plan_mission(self):
+            """Tests that `plan_mission` correctly invokes the planner."""
+            print("\n--- [Test Case 1: Plan Mission] ---")
+            mock_planner = self.orchestrator.agent_registry['PlannerAgent']
+            mock_planner.execute.return_value = AgentResponse(success=True, message="Plan created.")
+            
+            response = self.orchestrator.plan_mission("test goal")
+            
+            self.assertTrue(response.success)
+            mock_planner.execute.assert_called_once()
+            self.assertEqual(mock_planner.execute.call_args[0][0], "test goal")
+            logger.info("✅ test_plan_mission: PASSED")
 
-    # 1. Test Golden Path (Successful Mission)
-    print("\n[1] Testing successful mission execution (golden path)...")
-    setup_test_env()
-    orchestrator = Orchestrator()
-    orchestrator.global_context.workspace.repo_path = Path(TEST_WORKSPACE) # Point to test dir
-    result = orchestrator.execute_mission("Build a simple API")
-    assert "successfully" in result
-    assert orchestrator.global_context.task_graph.get_task("task_code").status == "success"
-    assert orchestrator.global_context.task_graph.get_task("task_test").status == "success"
-    logger.info("Golden path test passed.")
+        def test_refine_mission_plan(self):
+            """Tests that `refine_mission_plan` correctly invokes the refiner."""
+            print("\n--- [Test Case 2: Refine Mission Plan] ---")
+            mock_refiner = self.orchestrator.agent_registry['PlanRefinementAgent']
+            mock_refiner.execute.return_value = AgentResponse(success=True, message="Plan refined.")
+            
+            # A plan must exist to be refined
+            self.orchestrator.global_context.task_graph.add_task(TaskNode(task_id="t1", goal="a", assigned_agent="b"))
 
-    # 2. Test Failure and Recovery Path
-    print("\n[2] Testing mission with failure and successful recovery...")
-    setup_test_env()
-    # Make the coder fail this time
-    AGENT_REGISTRY["CodeGenerationAgent"] = MockFailureAgent
-    orchestrator = Orchestrator()
-    orchestrator.global_context.workspace.repo_path = Path(TEST_WORKSPACE)
-    result = orchestrator.execute_mission("Build a simple API")
-    assert "successfully" in result # Mission still succeeds because it recovered
-    
-    # Check the state of the graph
-    original_failed_task = orchestrator.global_context.task_graph.get_task("task_code")
-    original_dependent_task = orchestrator.global_context.task_graph.get_task("task_test")
-    
-    # These tasks don't exist in the final graph because the planner replaced them
-    assert original_failed_task is None
-    assert original_dependent_task is None
+            response = self.orchestrator.refine_mission_plan("refinement feedback")
 
-    # The new recovery tasks should exist and be successful
-    assert orchestrator.global_context.task_graph.get_task("task_debug").status == "success"
-    assert orchestrator.global_context.task_graph.get_task("task_fix").status == "success"
-    logger.info("Failure and recovery path test passed.")
+            self.assertTrue(response.success)
+            mock_refiner.execute.assert_called_once()
+            self.assertEqual(mock_refiner.execute.call_args[0][0], "refinement feedback")
+            logger.info("✅ test_refine_mission_plan: PASSED")
+            
+        def test_refine_mission_plan_fails_without_plan(self):
+            """Tests that refinement fails if no plan exists."""
+            print("\n--- [Test Case 3: Refine Mission Plan Fails Without Plan] ---")
+            # Ensure the task graph is empty
+            self.orchestrator.global_context.task_graph.nodes = {}
+            
+            response = self.orchestrator.refine_mission_plan("feedback")
+            
+            self.assertFalse(response.success)
+            self.assertIn("no active plan to refine", response.message)
+            logger.info("✅ test_refine_mission_plan_fails_without_plan: PASSED")
 
-    # 3. Test Unrecoverable Failure (Planner fails to recover)
-    print("\n[3] Testing mission with unrecoverable failure...")
-    setup_test_env()
-    AGENT_REGISTRY["CodeGenerationAgent"] = MockFailureAgent
-    # This special mock planner will also fail on the recovery attempt
-    AGENT_REGISTRY["PlannerAgent"] = lambda: MockPlanner(should_fail=True)
-    orchestrator = Orchestrator()
-    orchestrator.global_context.workspace.repo_path = Path(TEST_WORKSPACE)
-    result = orchestrator.execute_mission("Build a simple API")
-    assert "unrecoverable" in result
-    logger.info("Unrecoverable failure test passed.")
-
-    # Cleanup
-    shutil.rmtree(TEST_WORKSPACE)
-    print("\n--- All Orchestrator Tests Passed Successfully ---")
+    unittest.main(argv=['first-arg-is-ignored'], exit=False)

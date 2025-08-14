@@ -18,6 +18,7 @@ from .context_builder import ContextBuilderAgent
 from .tooling import ToolingAgent
 from .debugging import DebuggingAgent
 from .quality_officer import ChiefQualityOfficerAgent
+from .plan_refiner import PlanRefinementAgent
 
 # Get a logger instance for this module.
 logger = logging.getLogger(__name__)
@@ -29,6 +30,7 @@ logger = logging.getLogger(__name__)
 AGENT_REGISTRY: Dict[str, Type[BaseAgent]] = {
     # Foundational Agents
     "PlannerAgent": PlannerAgent,
+    "PlanRefinementAgent": PlanRefinementAgent,     
     "IntentClarificationAgent": IntentClarificationAgent,
 
     # Architecture & Design Agents

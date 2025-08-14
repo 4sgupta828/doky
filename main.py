@@ -57,8 +57,14 @@ def main(args: List[str]) -> None:
         # The orchestrator's __init__ handles the setup of all core components.
         orchestrator = Orchestrator(workspace_path=workspace_path)
 
-        # 4. Start the mission. This is the primary blocking call.
-        final_outcome = orchestrator.execute_mission(mission_goal)
+        # 4. Plan the mission first
+        plan_response = orchestrator.plan_mission(mission_goal)
+        if not plan_response.success:
+            print(f"Planning failed: {plan_response.message}")
+            return 1
+        
+        # 5. Execute the plan
+        final_outcome = orchestrator.execute_plan()
 
         # 5. Print the final result of the mission.
         print("\n" + "="*60)
