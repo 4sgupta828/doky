@@ -107,10 +107,9 @@ class TestGenerationAgent(BaseAgent):
 
         # Define JSON schema for guaranteed structured response
         test_generation_schema = {
-            "type": "object",
-            "patternProperties": {
-                ".*": {"type": "string"}
-            },
+            "type": "object", 
+            "properties": {},
+            "additionalProperties": {"type": "string"},
             "description": "Dictionary mapping test file paths to their test code content"
         }
 

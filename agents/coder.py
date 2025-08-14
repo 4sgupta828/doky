@@ -108,9 +108,8 @@ class CodeGenerationAgent(BaseAgent):
         # Define JSON schema for guaranteed structured response
         code_generation_schema = {
             "type": "object",
-            "patternProperties": {
-                ".*": {"type": "string"}
-            },
+            "properties": {},
+            "additionalProperties": {"type": "string"},
             "description": "Dictionary mapping file paths to their code content"
         }
 

@@ -20,14 +20,16 @@ class Orchestrator:
     with the AdaptiveEngine when failures occur. It acts purely as a conductor.
     """
 
-    def __init__(self, workspace_path: str = "./mission_workspace"):
+    def __init__(self, workspace_path: str = "./mission_workspace", ui_interface: Any = None):
         """
         Initializes the Orchestrator and all core components of the agent collective.
         This setup phase is critical for establishing the mission's environment.
         
         Args:
             workspace_path: The directory path for the mission's workspace.
+            ui_interface: The UI interface for user interaction (optional).
         """
+        self.ui_interface = ui_interface
         # Load environment variables from .env file
         try:
             from dotenv import load_dotenv
@@ -69,6 +71,12 @@ class Orchestrator:
                     registry[agent_name] = agent_class(
                         agent_capabilities=all_capabilities, 
                         llm_client=self.llm_client
+                    )
+                elif agent_name == "IntentClarificationAgent":
+                    # IntentClarificationAgent needs both LLM client and UI interface
+                    registry[agent_name] = agent_class(
+                        llm_client=self.llm_client,
+                        ui_interface=self.ui_interface
                     )
                 else:
                     # Try to inject LLM client into other agents

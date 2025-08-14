@@ -39,9 +39,7 @@ class CollaborationUI:
         completed, running, and pending tasks.
         """
         print("\n" + "="*80)
-        print(f"{Style.BOLD}
-<img src="https://placehold.co/15x15/7c3aed/ffffff?text=S" alt="Status Icon">
- MISSION STATUS{Style.RESET}")
+        print(f"{Style.BOLD}🎯 MISSION STATUS{Style.RESET}")
         print("="*80)
 
         if not context.task_graph.nodes:
@@ -90,9 +88,7 @@ class CollaborationUI:
     def prompt_for_input(self, prompt: str) -> str:
         """Asks the user an open-ended question."""
         print("\n" + "-"*80)
-        print(f"
-<img src="https://placehold.co/15x15/3b82f6/ffffff?text=Q" alt="Question Icon">
- {Style.Fg.BLUE}{Style.BOLD}ACTION REQUIRED{Style.RESET}")
+        print(f"❓ {Style.Fg.BLUE}{Style.BOLD}ACTION REQUIRED{Style.RESET}")
         print(f"  > {prompt}")
         print("-"*80)
         user_response = input("Your response: ")
@@ -105,9 +101,7 @@ class CollaborationUI:
         This is the generic approval mechanism for plans, commands, etc.
         """
         print("\n" + "-"*80)
-        print(f"
-<img src="https://placehold.co/15x15/f59e0b/ffffff?text=A" alt="Approval Icon">
- {Style.Fg.YELLOW}{Style.BOLD}APPROVAL REQUIRED{Style.RESET}")
+        print(f"⚠️ {Style.Fg.YELLOW}{Style.BOLD}APPROVAL REQUIRED{Style.RESET}")
         print(f"  > {question}")
         print("-"*80)
         response = input("Do you want to proceed? (yes/no): ").lower().strip()
@@ -119,6 +113,42 @@ class CollaborationUI:
             print(f"\n❌ {Style.Fg.RED}[Error]{Style.RESET} {message}")
         else:
             print(f"\n🤖 {Style.Fg.BLUE}[System]{Style.RESET} {message}")
+
+    def present_plan_for_approval(self, task_graph) -> bool:
+        """
+        Presents the generated plan to the user and asks for approval.
+        Returns True if approved, False if rejected.
+        """
+        print("\n" + "="*80)
+        print(f"📋 {Style.BOLD}{Style.Fg.BLUE}GENERATED PLAN{Style.RESET}")
+        print("="*80)
+        
+        if not task_graph.nodes:
+            print("No tasks in the plan.")
+            return False
+        
+        # Display tasks in dependency order
+        for i, (task_id, task) in enumerate(task_graph.nodes.items(), 1):
+            status_icon = "✅" if task.status == "success" else "🔄" if task.status == "running" else "⏸️"
+            print(f"{i:2}. {status_icon} {task.goal}")
+            print(f"    Agent: {task.assigned_agent}")
+            if task.dependencies:
+                print(f"    Dependencies: {', '.join(task.dependencies)}")
+            print()
+        
+        print("="*80)
+        print("Options:")
+        print("  approve - Execute this plan")
+        print("  refine  - Modify or improve the plan") 
+        print("  cancel  - Cancel and start over")
+        print("-" * 80)
+        
+        while True:
+            choice = input("Your choice (approve/refine/cancel): ").lower().strip()
+            if choice in ["approve", "refine", "cancel"]:
+                logger.info(f"User chose: {choice}")
+                return choice
+            print("Please enter 'approve', 'refine', or 'cancel'")
 
 
 # --- Self-Testing Block ---

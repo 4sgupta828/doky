@@ -90,28 +90,26 @@ class PlanRefinementAgent(BaseAgent):
                     "properties": {
                         "nodes": {
                             "type": "object",
-                            "patternProperties": {
-                                "^task_.*": {
-                                    "type": "object",
-                                    "properties": {
-                                        "task_id": {"type": "string"},
-                                        "goal": {"type": "string"},
-                                        "assigned_agent": {"type": "string"},
-                                        "dependencies": {
-                                            "type": "array",
-                                            "items": {"type": "string"}
-                                        },
-                                        "input_artifact_keys": {
-                                            "type": "array",
-                                            "items": {"type": "string"}
-                                        },
-                                        "output_artifact_keys": {
-                                            "type": "array", 
-                                            "items": {"type": "string"}
-                                        }
+                            "additionalProperties": {
+                                "type": "object",
+                                "properties": {
+                                    "task_id": {"type": "string"},
+                                    "goal": {"type": "string"},
+                                    "assigned_agent": {"type": "string"},
+                                    "dependencies": {
+                                        "type": "array",
+                                        "items": {"type": "string"}
                                     },
-                                    "required": ["task_id", "goal", "assigned_agent"]
-                                }
+                                    "input_artifact_keys": {
+                                        "type": "array",
+                                        "items": {"type": "string"}
+                                    },
+                                    "output_artifact_keys": {
+                                        "type": "array", 
+                                        "items": {"type": "string"}
+                                    }
+                                },
+                                "required": ["task_id", "goal", "assigned_agent"]
                             }
                         }
                     },

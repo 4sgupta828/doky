@@ -25,8 +25,8 @@ class InteractiveSession:
             workspace_path: The file path for the mission's workspace.
         """
         try:
-            self.orchestrator = Orchestrator(workspace_path=workspace_path)
             self.ui = CollaborationUI()
+            self.orchestrator = Orchestrator(workspace_path=workspace_path, ui_interface=self.ui)
             self.global_context = self.orchestrator.global_context
             logging.info("InteractiveSession initialized successfully.")
         except Exception as e:
