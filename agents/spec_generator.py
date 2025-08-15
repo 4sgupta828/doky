@@ -142,6 +142,9 @@ class SpecGenerationAgent(BaseAgent):
 
     def execute(self, goal: str, context: GlobalContext, current_task: TaskNode) -> AgentResponse:
         logger.info(f"SpecGenerationAgent executing with goal: '{goal}'")
+        
+        # Report meaningful progress
+        self.report_progress("Creating specification", f"Processing goal: '{goal[:80]}...'")
 
         input_artifact_key = current_task.input_artifact_keys[0] if current_task.input_artifact_keys else "clarified_requirements.md"
         requirements_doc = context.get_artifact(input_artifact_key)
@@ -158,20 +161,34 @@ class SpecGenerationAgent(BaseAgent):
                 "working_from": "goal_only",
                 "expected_artifact": input_artifact_key
             })
+            self.report_thinking(f"No clarified requirements found. I'll work directly from the user's goal and make reasonable assumptions about the technical requirements.")
+        else:
+            # Show the requirements that were found
+            self.report_intermediate_output("requirements", requirements_doc[:500])
 
         try:
             # Detect quality level from goal and context
             quality_level = self._detect_quality_level(goal, context)
             logger.info(f"Using spec quality level: {quality_level.value.upper()}")
             
+            if quality_level != SpecQuality.FAST:
+                self.report_thinking(f"I'll generate a {quality_level.value} quality specification - this means more detailed technical requirements and comprehensive coverage.")
+            
+            # Generate the specification
             prompt = self._build_prompt(requirements_doc, is_fallback=is_fallback, quality=quality_level)
             technical_spec = self.llm_client.invoke(prompt)
 
             if not technical_spec or not isinstance(technical_spec, str):
-                 return AgentResponse(success=False, message="LLM returned an empty or invalid spec.")
-
+                self.fail_step("Failed to generate specification", ["Check LLM configuration", "Verify API connectivity", "Try simplifying the requirements"])
+                return AgentResponse(success=False, message="LLM returned an empty or invalid spec.")
+            
+            # Show the generated specification to the user
+            self.report_intermediate_output("generated_specification", technical_spec)
+            
+            # Store the specification
             output_artifact_key = "technical_spec.md"
             context.add_artifact(key=output_artifact_key, value=technical_spec, source_task_id=current_task.task_id)
+            
             return AgentResponse(success=True, message="Successfully generated technical specification.", artifacts_generated=[output_artifact_key])
 
         except NotImplementedError:

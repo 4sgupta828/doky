@@ -1,14 +1,15 @@
 # orchestrator.py
 import logging
 import time
-from typing import Dict, Optional, List, Any
+from typing import Dict, Optional, Any
 
 # Foundational dependencies
 from core.context import GlobalContext
 from core.adaptive_engine import AdaptiveEngine
-from core.models import TaskNode, AgentResponse, TaskGraph
-from agents import get_agent, AGENT_REGISTRY, BaseAgent
+from core.models import TaskNode, AgentResponse
+from agents import AGENT_REGISTRY, BaseAgent
 from utils.logger import setup_logger
+from interfaces.progress_tracker import ProgressTracker
 
 # Configure the logger for this module
 setup_logger()
@@ -32,6 +33,7 @@ class Orchestrator:
             global_context: Existing GlobalContext to use (for crash recovery), overrides workspace_path
         """
         self.ui_interface = ui_interface
+        self.progress_tracker = ProgressTracker(ui_interface=ui_interface)
         
         # Use provided context or create new one
         if global_context:
@@ -237,11 +239,38 @@ class Orchestrator:
             return AgentResponse(success=False, message=error_msg)
 
         logging.info(f"Invoking agent '{agent_name}' for task '{current_task.task_id}'...")
+        
+        # Start progress tracking
+        self.progress_tracker.start_agent_progress(
+            agent_name, current_task.task_id, current_task.goal
+        )
+        
         try:
-            return agent_to_run.execute(current_task.goal, self.global_context, current_task)
+            # Inject progress tracker into agent if it supports it
+            if hasattr(agent_to_run, 'set_progress_tracker'):
+                agent_to_run.set_progress_tracker(self.progress_tracker, current_task.task_id)
+            
+            response = agent_to_run.execute(current_task.goal, self.global_context, current_task)
+            
+            # Complete progress tracking
+            self.progress_tracker.finish_agent_progress(current_task.task_id, success=response.success)
+            
+            return response
+            
         except Exception as e:
             error_msg = f"Uncaught exception in agent '{agent_name}': {e}"
             logging.critical(error_msg, exc_info=True)
+            
+            # Report failure with troubleshooting steps
+            troubleshooting_steps = [
+                f"Check agent implementation for '{agent_name}'",
+                "Review task inputs and dependencies",
+                "Check logs for detailed error information",
+                "Verify LLM client configuration if agent uses LLM"
+            ]
+            self.progress_tracker.fail_step(current_task.task_id, error_msg, troubleshooting_steps)
+            self.progress_tracker.finish_agent_progress(current_task.task_id, success=False)
+            
             return AgentResponse(success=False, message=error_msg)
 
 

@@ -185,8 +185,14 @@ class TestGenerationAgent(BaseAgent):
     def execute(self, goal: str, context: GlobalContext, current_task: TaskNode) -> AgentResponse:
         logger.info(f"TestGenerationAgent executing with goal: '{goal}'")
         
+        # Report meaningful progress
+        self.report_progress("Generating tests", f"Creating tests for: '{goal[:80]}...'")
+        
         test_type = self._determine_test_type(goal)
         logger.info(f"Determined required test type: {test_type}")
+        
+        if test_type != "unit":
+            self.report_thinking(f"I'll create {test_type} tests - these will be more comprehensive than simple unit tests.")
 
         spec = context.get_artifact("technical_spec.md")
         manifest = context.get_artifact("file_manifest.json")

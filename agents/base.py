@@ -43,6 +43,10 @@ class BaseAgent(ABC):
             raise ValueError("Agent name and description cannot be empty.")
         self.name = name
         self.description = description
+        
+        # Progress tracking (optional)
+        self.progress_tracker = None
+        self.current_task_id = None
 
     @abstractmethod
     def execute(self, goal: str, context: GlobalContext, current_task: TaskNode) -> AgentResponse:
@@ -75,6 +79,42 @@ class BaseAgent(ABC):
         """
         return {"name": self.name, "description": self.description}
     
+    def set_progress_tracker(self, progress_tracker, task_id: str):
+        """
+        Sets up progress tracking for this agent execution.
+        
+        Args:
+            progress_tracker: The ProgressTracker instance
+            task_id: The current task ID being executed
+        """
+        self.progress_tracker = progress_tracker
+        self.current_task_id = task_id
+    
+    def report_progress(self, step: str, details: str = None):
+        """Helper method for agents to report progress."""
+        if self.progress_tracker and self.current_task_id:
+            self.progress_tracker.report_progress(self.current_task_id, step, details)
+    
+    def report_thinking(self, thought: str):
+        """Helper method for agents to report their thinking process."""
+        if self.progress_tracker and self.current_task_id:
+            self.progress_tracker.report_thinking(self.current_task_id, thought)
+    
+    def report_intermediate_output(self, output_type: str, content):
+        """Helper method for agents to report intermediate outputs."""
+        if self.progress_tracker and self.current_task_id:
+            self.progress_tracker.report_intermediate_output(self.current_task_id, output_type, content)
+    
+    def complete_step(self, output=None):
+        """Helper method for agents to mark steps as completed."""
+        if self.progress_tracker and self.current_task_id:
+            self.progress_tracker.complete_step(self.current_task_id, output)
+    
+    def fail_step(self, error: str, troubleshooting_steps=None):
+        """Helper method for agents to report step failures."""
+        if self.progress_tracker and self.current_task_id:
+            self.progress_tracker.fail_step(self.current_task_id, error, troubleshooting_steps)
+
     def handle_context_error(self, error: ContextTooLargeError, goal: str) -> AgentResponse:
         """
         Common handler for context size errors across all agents.

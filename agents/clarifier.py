@@ -72,6 +72,9 @@ class IntentClarificationAgent(BaseAgent):
         presents them to the user, and compiles a structured requirements document.
         """
         logger.info(f"ClarificationAgent executing with goal: '{goal}'")
+        
+        # Report meaningful progress  
+        self.report_progress("Clarifying requirements", f"Analyzing goal: '{goal[:80]}...'")
 
         # Define JSON schema for guaranteed structured response
         questions_schema = {

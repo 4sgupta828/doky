@@ -189,6 +189,9 @@ class CodeGenerationAgent(BaseAgent):
         
         try:
             logger.info(f"CodeGenerationAgent executing with goal: '{goal}'")
+            
+            # Report meaningful progress
+            self.report_progress("Generating code", f"Processing request: '{goal[:80]}...'")
 
             # 1. Retrieve necessary artifacts from the context.
             spec_key = "technical_spec.md"
@@ -204,19 +207,25 @@ class CodeGenerationAgent(BaseAgent):
                 files_to_generate = []
                 logger.info("No spec or manifest found. Working directly from goal.")
                 context.log_event("coder_fallback", {"reason": "no_artifacts", "working_from": "goal_only"})
+                self.report_thinking("No technical spec or file manifest found. I'll determine what to build directly from the user's goal.")
             elif not tech_spec:
                 # Have manifest but no spec - use goal as spec
                 tech_spec = f"User Request: {goal}"
                 files_to_generate = manifest.get("files_to_create", [])
                 logger.info("No spec found. Using goal as specification.")
+                self.report_intermediate_output("file_manifest", json.dumps(manifest, indent=2))
             elif not manifest:
                 # Have spec but no manifest - infer files from spec and goal
                 tech_spec = tech_spec
                 files_to_generate = []
                 logger.info("No manifest found. Will infer files to create from spec.")
+                self.report_intermediate_output("technical_spec", tech_spec[:500])
             else:
-                # Have both artifacts
+                # Have both artifacts - show what we're working with
                 files_to_generate = manifest.get("files_to_create", [])
+                self.report_intermediate_output("technical_spec", tech_spec[:500])
+                if len(files_to_generate) > 0:
+                    self.report_thinking(f"I have both technical spec and file manifest. I'll create {len(files_to_generate)} files: {', '.join(files_to_generate[:3])}{'...' if len(files_to_generate) > 3 else ''}")
             
             # If no files specified, let the LLM decide what files to create based on the goal/spec
             if not files_to_generate:
@@ -229,6 +238,9 @@ class CodeGenerationAgent(BaseAgent):
                 content = context.workspace.get_file_content(file_path)
                 if content:
                     existing_code[file_path] = content
+            
+            if existing_code:
+                self.report_thinking(f"Found {len(existing_code)} existing files that I'll modify/extend rather than overwrite.")
 
             # 3. Construct the prompt and invoke the LLM.
             # Define JSON schema for guaranteed structured response
@@ -250,8 +262,13 @@ class CodeGenerationAgent(BaseAgent):
                 # Detect quality level from goal and context
                 quality_level = self._detect_quality_level(goal, context)
                 logger.info(f"Using code quality level: {quality_level.value.upper()}")
+                self.complete_step(f"Quality level: {quality_level.value.upper()}")
                 
+                self.report_thinking(f"I'll generate {quality_level.value} quality code. This determines how much documentation, error handling, and optimization to include.")
+                
+                self.report_progress("Building LLM prompt", f"Creating {quality_level.value} quality prompt with specifications")
                 prompt = self._build_prompt(files_to_generate, tech_spec, existing_code, quality_level)
+                self.complete_step("Prompt constructed")
                 logger.debug(f"Built prompt with {len(prompt)} characters")
                 
                 # Use regular invoke by default, fall back to function calling if needed

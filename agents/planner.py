@@ -203,12 +203,18 @@ class PlannerAgent(BaseAgent):
         Generates a TaskGraph by calling an LLM and validating its response.
         """
         logger.info(f"PlannerAgent executing with goal: '{goal}'")
+        
+        # Report meaningful progress
+        self.report_progress("Creating plan", f"Analyzing goal: '{goal[:80]}...'")
 
         context_summary = {"files_in_workspace": context.workspace.list_files()}
         
         # Detect quality level from goal and context
         quality_level = self._detect_quality_level(goal, context)
         logger.info(f"Using planning quality level: {quality_level.value.upper()}")
+        
+        # Show thinking process for important decisions
+        self.report_thinking(f"I'll create a {quality_level.value} quality plan. Let me analyze what agents are available and how to break down this goal effectively.")
         
         prompt = self._build_prompt(goal, context_summary, quality_level)
 
@@ -245,11 +251,11 @@ class PlannerAgent(BaseAgent):
         }
 
         try:
-            # Use regular invoke by default, fall back to function calling if needed
+            # Generate the plan using LLM
             logger.debug("Using regular invoke method (primary approach)")
             llm_response_str = self.llm_client.invoke(prompt)
             
-            # Check if the response is valid JSON with actual content
+            # Validate and handle LLM response
             try:
                 test_parse = json.loads(llm_response_str)
                 if not isinstance(test_parse, dict) or not test_parse.get('nodes'):
@@ -257,6 +263,8 @@ class PlannerAgent(BaseAgent):
                 logger.debug("Regular invoke succeeded with valid JSON response")
             except (json.JSONDecodeError, ValueError) as e:
                 logger.warning(f"Regular invoke failed to produce valid JSON ({e}), trying function calling")
+                self.report_thinking("Initial response wasn't valid JSON. Retrying with structured output.")
+                
                 if hasattr(self.llm_client, 'invoke_with_schema'):
                     try:
                         logger.debug(f"Planner prompt length: {len(prompt)} characters")
@@ -265,25 +273,34 @@ class PlannerAgent(BaseAgent):
                         logger.debug("Function calling fallback succeeded")
                     except Exception as fallback_error:
                         logger.error(f"Function calling fallback also failed: {fallback_error}")
-                        # Keep the original response from regular invoke for error reporting
-                        pass
+                        self.fail_step("Failed to generate valid plan", 
+                                     ["Check LLM client configuration", "Verify API keys", "Try simplifying the goal"])
+                        return AgentResponse(success=False, message=f"LLM failed to generate a valid plan: {fallback_error}")
                 else:
                     logger.warning("Function calling not available, keeping original response")
             
+            # Parse and validate the plan
             plan_data = json.loads(llm_response_str)
             logger.debug(f"Parsed plan data: {plan_data}")
 
-            # Use Pydantic to parse and validate the entire structure.
-            # This is a critical step for ensuring data integrity from the LLM.
+            # Use Pydantic to validate the structure
             task_graph = TaskGraph(**plan_data)
             logger.debug(f"TaskGraph nodes: {task_graph.nodes}")
             logger.debug(f"TaskGraph nodes length: {len(task_graph.nodes) if task_graph.nodes else 0}")
 
             if not task_graph.nodes:
+                self.fail_step("Empty plan generated", ["Make the goal more specific", "Provide more context", "Try a different quality level"])
                 return AgentResponse(success=False, message="LLM failed to generate a plan with any tasks.")
 
-            # The plan is valid, so we add it to the global context.
-            # We don't overwrite the whole graph, but update it with the new nodes.
+            # Show the generated plan to the user
+            plan_summary = []
+            for task_id, task in task_graph.nodes.items():
+                deps = f" (depends on: {', '.join(task.dependencies)})" if task.dependencies else ""
+                plan_summary.append(f"• {task_id}: {task.goal} → {task.assigned_agent}{deps}")
+            
+            self.report_intermediate_output("generated_plan", "\n".join(plan_summary))
+
+            # Store the plan in context
             context.task_graph.nodes.update(task_graph.nodes)
             context.log_event("plan_generated", {"task_count": len(task_graph.nodes), "source_task": current_task.task_id})
 

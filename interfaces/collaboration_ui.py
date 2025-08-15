@@ -1,14 +1,13 @@
 # interfaces/collaboration_ui.py
 import logging
 import os
-import subprocess
-import tempfile
 import sys
-from typing import Dict, Any
+import time
+from typing import Any, List
 
 # Foundational dependencies
 from core.context import GlobalContext
-from core.models import TaskGraph, TaskNode, AgentResponse
+from core.models import TaskNode, AgentResponse
 from utils.input_handler import get_input_handler
 from typing import TYPE_CHECKING
 
@@ -18,19 +17,27 @@ if TYPE_CHECKING:
 # Get a logger instance for this module
 logger = logging.getLogger(__name__)
 
-# --- ANSI Escape Codes for Rich Terminal Formatting ---
+# --- GitHub-inspired Color Theme ---
 class Style:
-    """A helper class for ANSI terminal styling."""
+    """Clean, professional color theme inspired by GitHub."""
     RESET = "\033[0m"
     BOLD = "\033[1m"
+    DIM = "\033[2m"
     STRIKETHROUGH = "\033[9m"
     
     class Fg:
-        GREEN = "\033[32m"
-        BLUE = "\033[34m"
-        YELLOW = "\033[33m"
-        RED = "\033[31m"
-        GRAY = "\033[90m"
+        # Success states - soft green
+        SUCCESS = "\033[38;2;40;167;69m"    # GitHub green
+        # Info/progress - calm blue  
+        INFO = "\033[38;2;88;166;255m"      # GitHub blue
+        # Warnings - amber (less jarring than yellow)
+        WARNING = "\033[38;2;251;188;5m"   # GitHub amber
+        # Errors - muted red
+        ERROR = "\033[38;2;248;81;73m"     # GitHub red
+        # Secondary text - soft gray
+        MUTED = "\033[38;2;106;115;125m"   # GitHub gray
+        # Code/output - purple accent
+        CODE = "\033[38;2;171;142;255m"    # GitHub purple
 
 class CollaborationUI:
     """
@@ -76,38 +83,38 @@ class CollaborationUI:
                 tasks_by_status[task.status].append(task)
 
         if tasks_by_status["completed"]:
-            print(f"\n✅ {Style.Fg.GREEN}{Style.BOLD}Completed Tasks{Style.RESET}")
+            print(f"\n✅ {Style.Fg.SUCCESS}{Style.BOLD}Completed Tasks{Style.RESET}")
             for task in sorted(tasks_by_status["completed"], key=lambda t: t.task_id):
                 status_text = "OBSOLETE" if task.status == "obsolete" else "SUCCESS"
-                print(f"   - {Style.Fg.GRAY}{Style.STRIKETHROUGH}[{status_text}] {task.task_id}: {task.goal}{Style.RESET}")
+                print(f"   - {Style.Fg.MUTED}{Style.STRIKETHROUGH}[{status_text}] {task.task_id}: {task.goal}{Style.RESET}")
 
         if tasks_by_status["running"]:
-            print(f"\n🔵 {Style.Fg.BLUE}{Style.BOLD}In Progress{Style.RESET}")
+            print(f"\n🔄 {Style.Fg.INFO}{Style.BOLD}In Progress{Style.RESET}")
             for task in sorted(tasks_by_status["running"], key=lambda t: t.task_id):
                 print(f"   - [RUNNING] {task.task_id}: {task.goal}")
         
         if tasks_by_status["failed"]:
-            print(f"\n❌ {Style.Fg.RED}{Style.BOLD}Failed Tasks{Style.RESET}")
+            print(f"\n❌ {Style.Fg.ERROR}{Style.BOLD}Failed Tasks{Style.RESET}")
             for task in sorted(tasks_by_status["failed"], key=lambda t: t.task_id):
                 print(f"   - [FAILED] {task.task_id}: {task.goal}")
                 if task.result:
-                    print(f"     {Style.Fg.RED}Reason: {task.result.message}{Style.RESET}")
+                    print(f"     {Style.Fg.ERROR}Reason: {task.result.message}{Style.RESET}")
 
         if tasks_by_status["pending"]:
-            print(f"\n⚪️ {Style.BOLD}Remaining Tasks{Style.RESET}")
+            print(f"\n⏳ {Style.BOLD}Remaining Tasks{Style.RESET}")
             for task in sorted(tasks_by_status["pending"], key=lambda t: t.task_id):
                 print(f"   - [PENDING] {task.task_id}: {task.goal}")
         
         if execution_summary:
             print("-" * 80)
-            print(f"🤖 {Style.Fg.YELLOW}[System] {execution_summary}{Style.RESET}")
+            print(f"ℹ️  {Style.Fg.INFO}[System] {execution_summary}{Style.RESET}")
 
         print("="*80)
 
     def prompt_for_input(self, prompt: str) -> str:
         """Asks the user an open-ended question."""
         print("\n" + "-"*80)
-        print(f"❓ {Style.Fg.BLUE}{Style.BOLD}ACTION REQUIRED{Style.RESET}")
+        print(f"💬 {Style.Fg.INFO}{Style.BOLD}INPUT REQUIRED{Style.RESET}")
         print(f"  > {prompt}")
         print("-"*80)
         user_response = self.input_handler.prompt("Your response: ")
@@ -120,7 +127,7 @@ class CollaborationUI:
         This is the generic approval mechanism for plans, commands, etc.
         """
         print("\n" + "-"*80)
-        print(f"⚠️ {Style.Fg.YELLOW}{Style.BOLD}APPROVAL REQUIRED{Style.RESET}")
+        print(f"⚡ {Style.Fg.WARNING}{Style.BOLD}APPROVAL REQUIRED{Style.RESET}")
         print(f"  > {question}")
         print("-"*80)
         response = self.input_handler.prompt("Do you want to proceed? (yes/no): ").lower()
@@ -129,9 +136,9 @@ class CollaborationUI:
     def display_system_message(self, message: str, is_error: bool = False):
         """Prints a formatted system message for updates or errors."""
         if is_error:
-            print(f"\n❌ {Style.Fg.RED}[Error]{Style.RESET} {message}")
+            print(f"\n❌ {Style.Fg.ERROR}[Error]{Style.RESET} {message}")
         else:
-            print(f"\n🤖 {Style.Fg.BLUE}[System]{Style.RESET} {message}")
+            print(f"\nℹ️  {Style.Fg.INFO}[System]{Style.RESET} {message}")
 
     def present_plan_for_approval(self, task_graph) -> bool:
         """
@@ -139,7 +146,7 @@ class CollaborationUI:
         Returns True if approved, False if rejected.
         """
         print("\n" + "="*80)
-        print(f"📋 {Style.BOLD}{Style.Fg.BLUE}GENERATED PLAN{Style.RESET}")
+        print(f"📋 {Style.BOLD}{Style.Fg.INFO}GENERATED PLAN{Style.RESET}")
         print("="*80)
         
         if not task_graph.nodes:
@@ -186,8 +193,8 @@ class CollaborationUI:
 
     def _display_artifact_content(self, artifact_key: str, content: Any):
         """Helper method to format and display artifact content."""
-        print(f"\n   📄 {Style.BOLD}{Style.Fg.BLUE}{artifact_key}:{Style.RESET}")
-        print("   " + "─" * 76)
+        print(f"\n   📄 {Style.BOLD}{Style.Fg.CODE}{artifact_key}:{Style.RESET}")
+        print(f"   {Style.Fg.MUTED}" + "─" * 76 + f"{Style.RESET}")
         
         if isinstance(content, str):
             # For text content, display with proper indentation
@@ -195,7 +202,7 @@ class CollaborationUI:
             for line in lines[:50]:  # Limit to first 50 lines to avoid overwhelming output
                 print(f"   {line}")
             if len(lines) > 50:
-                print(f"   {Style.Fg.GRAY}... ({len(lines) - 50} more lines){Style.RESET}")
+                print(f"   {Style.Fg.MUTED}... ({len(lines) - 50} more lines){Style.RESET}")
         elif isinstance(content, (dict, list)):
             # For structured data, display as formatted JSON
             import json
@@ -204,25 +211,64 @@ class CollaborationUI:
             for line in lines[:30]:  # Limit to first 30 lines for JSON
                 print(f"   {line}")
             if len(lines) > 30:
-                print(f"   {Style.Fg.GRAY}... ({len(lines) - 30} more lines){Style.RESET}")
+                print(f"   {Style.Fg.MUTED}... ({len(lines) - 30} more lines){Style.RESET}")
         else:
             # For other types, show string representation
             print(f"   {str(content)[:500]}{'...' if len(str(content)) > 500 else ''}")
         
-        print("   " + "─" * 76)
+        print(f"   {Style.Fg.MUTED}" + "─" * 76 + f"{Style.RESET}")
+
+    def display_agent_progress(self, agent_name: str, step: str, details: str = None):
+        """Shows real-time progress updates during agent execution."""
+        timestamp = time.strftime("%H:%M:%S")
+        print(f"\n🔄 [{Style.Fg.MUTED}{timestamp}{Style.RESET}] {Style.Fg.INFO}{agent_name}{Style.RESET}: {step}")
+        if details:
+            print(f"   {Style.Fg.MUTED}└─ {details}{Style.RESET}")
+
+    def display_agent_thinking(self, agent_name: str, thought: str):
+        """Shows the agent's reasoning or thought process."""
+        print(f"\n💭 {Style.Fg.CODE}{agent_name} thinking:{Style.RESET}")
+        print(f"   {Style.Fg.MUTED}\"{thought}\"{Style.RESET}")
+
+    def display_intermediate_output(self, agent_name: str, output_type: str, content: Any, preview_lines: int = 10):
+        """Shows intermediate outputs like generated code, specs, etc. with preview."""
+        print(f"\n📄 {Style.Fg.INFO}{agent_name}{Style.RESET} generated {Style.Fg.CODE}{output_type}{Style.RESET}:")
+        print(f"   {Style.Fg.MUTED}" + "─" * 76 + f"{Style.RESET}")
+        
+        if isinstance(content, str):
+            lines = content.split('\n')
+            for i, line in enumerate(lines[:preview_lines]):
+                print(f"   {Style.Fg.MUTED}{i+1:3}{Style.RESET} | {line}")
+            if len(lines) > preview_lines:
+                print(f"   {Style.Fg.MUTED}... ({len(lines) - preview_lines} more lines){Style.RESET}")
+        else:
+            print(f"   {str(content)[:300]}{'...' if len(str(content)) > 300 else ''}")
+        print(f"   {Style.Fg.MUTED}" + "─" * 76 + f"{Style.RESET}")
+
+    def display_failure_analysis(self, agent_name: str, error: str, troubleshooting_steps: List[str] = None):
+        """Shows detailed failure analysis with troubleshooting suggestions."""
+        print(f"\n❌ {Style.Fg.ERROR}{Style.BOLD}{agent_name} FAILURE ANALYSIS{Style.RESET}")
+        print(f"   {Style.Fg.MUTED}" + "─" * 76 + f"{Style.RESET}")
+        print(f"   {Style.BOLD}Error:{Style.RESET} {error}")
+        
+        if troubleshooting_steps:
+            print(f"\n   {Style.BOLD}Suggested Troubleshooting Steps:{Style.RESET}")
+            for i, step in enumerate(troubleshooting_steps, 1):
+                print(f"   {Style.Fg.MUTED}{i}.{Style.RESET} {step}")
+        print(f"   {Style.Fg.MUTED}" + "─" * 76 + f"{Style.RESET}")
 
     def display_direct_command_result(self, agent_name: str, response: AgentResponse, context: 'GlobalContext' = None):
         """Displays the formatted result of a single agent's execution."""
-        print("\n" + "-"*80)
+        print(f"\n{Style.Fg.MUTED}" + "-"*80 + f"{Style.RESET}")
         if response.success:
-            print(f"✅ {Style.Fg.GREEN}{Style.BOLD}{agent_name} finished successfully.{Style.RESET}")
+            print(f"✅ {Style.Fg.SUCCESS}{Style.BOLD}{agent_name} finished successfully.{Style.RESET}")
         else:
-            print(f"❌ {Style.Fg.RED}{Style.BOLD}{agent_name} failed.{Style.RESET}")
+            print(f"❌ {Style.Fg.ERROR}{Style.BOLD}{agent_name} failed.{Style.RESET}")
         
         print(f"   - {Style.BOLD}Message:{Style.RESET} {response.message}")
         
         if response.artifacts_generated:
-            print(f"   - {Style.BOLD}Artifacts Created/Updated:{Style.RESET} {', '.join(response.artifacts_generated)}")
+            print(f"   - {Style.BOLD}Artifacts Created/Updated:{Style.RESET} {Style.Fg.CODE}{', '.join(response.artifacts_generated)}{Style.RESET}")
             
             # Display artifact content if context is provided
             if context:
@@ -231,8 +277,8 @@ class CollaborationUI:
                     if artifact_content is not None:
                         self._display_artifact_content(artifact_key, artifact_content)
                     else:
-                        print(f"   {Style.Fg.YELLOW}⚠️ Artifact '{artifact_key}' not found in context{Style.RESET}")
-        print("-"*80)
+                        print(f"   {Style.Fg.WARNING}⚠️ Artifact '{artifact_key}' not found in context{Style.RESET}")
+        print(f"{Style.Fg.MUTED}" + "-"*80 + f"{Style.RESET}")
         
 # --- Self-Testing Block ---
 if __name__ == "__main__":

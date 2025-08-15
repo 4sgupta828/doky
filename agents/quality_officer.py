@@ -89,6 +89,9 @@ class ChiefQualityOfficerAgent(BaseAgent):
 
     def execute(self, goal: str, context: GlobalContext, current_task: TaskNode) -> AgentResponse:
         logger.info(f"ChiefQualityOfficerAgent executing with goal: '{goal}'")
+        
+        # Report meaningful progress
+        self.report_progress("Quality audit", "Analyzing code quality and security")
 
         # 1. Gather all application code from the workspace.
         all_files = context.workspace.list_files()
