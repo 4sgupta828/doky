@@ -92,6 +92,9 @@ class CodeGenerationAgent(BaseAgent):
         if any(keyword in goal_lower for keyword in ['fast', 'quick', 'rapid', 'prototype', 'draft']):
             logger.info("Detected FAST quality level from goal keywords")
             return CodeQuality.FAST
+        elif any(keyword in goal_lower for keyword in ['decent', 'clean', 'readable', 'maintainable', 'structured', 'balanced']):
+            logger.info("Detected DECENT quality level from goal keywords")
+            return CodeQuality.DECENT
         elif any(keyword in goal_lower for keyword in ['production', 'enterprise', 'robust', 'comprehensive', 'high.quality']):
             logger.info("Detected PRODUCTION quality level from goal keywords")
             return CodeQuality.PRODUCTION
