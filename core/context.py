@@ -6,7 +6,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from core.models import TaskGraph  # Depends on Tier 1 models
+from core.models import TaskGraph, InterAgentLog  # Depends on Tier 1 models
 
 # Get a logger instance for this module.
 logger = logging.getLogger(__name__)
@@ -61,6 +61,9 @@ class GlobalContext:
         self.workspace: WorkspaceManager = GitWorkspaceManager(workspace_path)
         self.artifacts: Dict[str, Any] = {}
         self.mission_log: List[Dict[str, Any]] = []
+        
+        # Inter-agent communication transparency
+        self.inter_agent_log = InterAgentLog()
         
         # Auto-save configuration
         self.auto_save_enabled = True
@@ -136,6 +139,58 @@ class GlobalContext:
         # Auto-save after significant events
         if self.auto_save_enabled and event_type in ["task_completed", "task_failed", "agent_execution_finished"]:
             self._auto_save_if_needed()
+
+    def log_agent_communication(self, from_agent: str, to_agent: str, message_type: str, content: str, context_data: Dict[str, Any] = None, task_id: str = None):
+        """
+        Records an inter-agent communication for transparency.
+
+        Args:
+            from_agent: The agent initiating the communication
+            to_agent: The agent receiving the communication
+            message_type: Type of communication (handover, delegation, response, error)
+            content: The actual message or task description
+            context_data: Additional context data for the communication
+            task_id: Associated task ID if applicable
+        """
+        self.inter_agent_log.add_communication(from_agent, to_agent, message_type, content, context_data, task_id)
+        
+        # Also log as a regular event for consistency
+        self.log_event("inter_agent_communication", {
+            "from_agent": from_agent,
+            "to_agent": to_agent,
+            "message_type": message_type,
+            "content": content,
+            "task_id": task_id
+        })
+
+    def get_communication_summary(self) -> str:
+        """
+        Gets a formatted summary of all inter-agent communications for user display.
+        
+        Returns:
+            A formatted string showing the communication chain
+        """
+        return self.inter_agent_log.get_formatted_summary()
+    
+    def get_communication_chain(self) -> List[str]:
+        """
+        Gets a list of communication descriptions for programmatic use.
+        
+        Returns:
+            List of strings describing each communication
+        """
+        return self.inter_agent_log.get_communication_chain()
+    
+    def print_communication_summary(self):
+        """
+        Prints the inter-agent communication summary to console for user visibility.
+        """
+        summary = self.get_communication_summary()
+        print("\n" + "="*80)
+        print("INTER-AGENT COMMUNICATION TRANSPARENCY")
+        print("="*80)
+        print(summary)
+        print("="*80 + "\n")
 
     @classmethod
     def load_from_snapshot(cls, snapshot_path: str) -> 'GlobalContext':

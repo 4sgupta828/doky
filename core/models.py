@@ -10,6 +10,70 @@ from pydantic import BaseModel, Field, ValidationError
 # Get a logger instance for this module to report on model-related events.
 logger = logging.getLogger(__name__)
 
+# --- Inter-Agent Communication Models ---
+
+class AgentCommunication(BaseModel):
+    """
+    Represents a single communication between agents for transparency tracking.
+    This allows users to see the chain of inter-agent communications.
+    """
+    message_id: str = Field(default_factory=lambda: f"msg_{uuid.uuid4().hex[:8]}", description="Unique identifier for this message.")
+    from_agent: str = Field(..., description="Name of the agent sending the message.")
+    to_agent: str = Field(..., description="Name of the agent receiving the message.")
+    message_type: Literal["handover", "delegation", "response", "error"] = Field(..., description="Type of inter-agent communication.")
+    content: str = Field(..., description="The actual message content or task description.")
+    context_data: Dict[str, Any] = Field(default_factory=dict, description="Additional context data for the communication.")
+    timestamp: str = Field(default_factory=lambda: str(uuid.uuid4().int), description="Timestamp when message was created.")
+    task_id: Optional[str] = Field(None, description="Associated task ID if applicable.")
+
+class InterAgentLog(BaseModel):
+    """
+    A log of all inter-agent communications for a session or task chain.
+    This provides complete transparency into agent interactions.
+    """
+    session_id: str = Field(default_factory=lambda: f"session_{uuid.uuid4().hex[:8]}", description="Unique identifier for this communication session.")
+    communications: List[AgentCommunication] = Field(default_factory=list, description="List of all communications in chronological order.")
+    
+    def add_communication(self, from_agent: str, to_agent: str, message_type: str, content: str, context_data: Dict[str, Any] = None, task_id: str = None):
+        """Add a new communication to the log."""
+        comm = AgentCommunication(
+            from_agent=from_agent,
+            to_agent=to_agent,
+            message_type=message_type,
+            content=content,
+            context_data=context_data or {},
+            task_id=task_id
+        )
+        self.communications.append(comm)
+        logger.info(f"Inter-agent communication: {from_agent} -> {to_agent} ({message_type}): {content}")
+    
+    def get_communication_chain(self) -> List[str]:
+        """Get a human-readable representation of the communication chain."""
+        chain = []
+        for comm in self.communications:
+            chain.append(f"{comm.from_agent} -> {comm.to_agent} ({comm.message_type}): {comm.content}")
+        return chain
+    
+    def get_formatted_summary(self) -> str:
+        """Get a formatted summary for user display."""
+        if not self.communications:
+            return "No inter-agent communications recorded."
+        
+        summary = f"Inter-Agent Communication Chain (Session: {self.session_id}):\n"
+        summary += "=" * 60 + "\n"
+        
+        for i, comm in enumerate(self.communications, 1):
+            summary += f"{i}. {comm.from_agent} -> {comm.to_agent}\n"
+            summary += f"   Type: {comm.message_type.upper()}\n"
+            summary += f"   Message: {comm.content}\n"
+            if comm.context_data:
+                summary += f"   Context: {comm.context_data}\n"
+            if comm.task_id:
+                summary += f"   Task ID: {comm.task_id}\n"
+            summary += "\n"
+        
+        return summary
+
 # --- Core Data Models ---
 
 class AgentResponse(BaseModel):

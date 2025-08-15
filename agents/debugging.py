@@ -22,17 +22,22 @@ class LLMClient:
 
 class DebuggingAgent(BaseAgent):
     """
-    The team's expert troubleshooter. When a test fails, this agent is
-    activated to perform a root-cause analysis. It examines the code, the
-    error message, and the stack trace to pinpoint the source of the problem.
+    The team's expert troubleshooter and master investigator. This agent orchestrates
+    multiple specialized agents to solve complex problems through:
+    1. Evidence gathering (via ToolingAgent)
+    2. Root cause analysis and hypothesis generation
+    3. Smart fix strategy decisions (surgical fixes vs design changes via SpecAgent + CoderAgent)
+    4. Validation and iteration (via TestRunner + TestGenerator)
     """
 
-    def __init__(self, llm_client: Any = None):
+    def __init__(self, llm_client: Any = None, agent_registry: Dict[str, Any] = None):
         super().__init__(
             name="DebuggingAgent",
-            description="Analyzes failed tests and stack traces to find root causes and suggest fixes."
+            description="Master troubleshooter that orchestrates other agents to solve complex problems end-to-end."
         )
         self.llm_client = llm_client or LLMClient()
+        self.agent_registry = agent_registry or {}
+        self.max_debug_iterations = 3
 
     def _build_prompt(self, failed_test_report: Dict, code_context: str) -> str:
         """Constructs a detailed prompt to guide the LLM in debugging the code."""
@@ -70,90 +75,356 @@ class DebuggingAgent(BaseAgent):
         """
 
     def execute(self, goal: str, context: GlobalContext, current_task: TaskNode) -> AgentResponse:
-        logger.info(f"DebuggingAgent executing with goal: '{goal}'")
-
-        # 1. Retrieve necessary artifacts from the context.
-        report_key = "failed_test_report.json"
-        context_key = "targeted_code_context.txt"
+        """Main debugging orchestration method implementing the 4-phase approach."""
+        logger.info(f"DebuggingAgent executing with goal: '{goal}' - Starting comprehensive debugging process")
         
-        failed_report = context.get_artifact(report_key)
-        code_context = context.get_artifact(context_key)
-
-        if not failed_report or not code_context:
-            msg = f"Missing required artifacts: needs '{report_key}' and '{context_key}'."
-            logger.error(msg)
-            return AgentResponse(success=False, message=msg)
-
-        # 2. Invoke the LLM to perform the analysis.
-        # Define JSON schema for guaranteed structured response
-        debug_schema = {
-            "type": "object",
-            "properties": {
-                "root_cause_analysis": {
-                    "type": "string",
-                    "description": "Detailed analysis of the root cause"
-                },
-                "suggested_fix_diff": {
-                    "type": "string", 
-                    "description": "Suggested fix in diff format"
-                }
-            },
-            "required": ["root_cause_analysis", "suggested_fix_diff"]
-        }
-
-        try:
-            prompt = self._build_prompt(failed_report, code_context)
+        for iteration in range(self.max_debug_iterations):
+            logger.info(f"--- Debugging Iteration {iteration + 1}/{self.max_debug_iterations} ---")
             
-            # Use regular invoke by default, fall back to function calling if needed
-            logger.debug("Using regular invoke method (primary approach)")
-            llm_response_str = self.llm_client.invoke(prompt)
-            
-            # Check if the response is valid JSON with actual content
             try:
-                test_parse = json.loads(llm_response_str)
-                if not isinstance(test_parse, dict) or not test_parse.get('root_cause_analysis'):
-                    raise ValueError("Invalid or empty response")
-                logger.debug("Regular invoke succeeded with valid JSON response")
-            except (json.JSONDecodeError, ValueError) as e:
-                logger.warning(f"Regular invoke failed to produce valid JSON ({e}), trying function calling")
-                if hasattr(self.llm_client, 'invoke_with_schema'):
-                    try:
-                        llm_response_str = self.llm_client.invoke_with_schema(prompt, debug_schema)
-                        logger.debug("Function calling fallback succeeded")
-                    except Exception as fallback_error:
-                        logger.error(f"Function calling fallback also failed: {fallback_error}")
-                        # Keep the original response from regular invoke for error reporting
-                        pass
+                # Phase 1: Evidence Gathering
+                logger.info("Phase 1: Gathering comprehensive evidence...")
+                evidence = self._gather_evidence(context, current_task)
+                
+                # Phase 2: Root Cause Analysis & Hypothesis Generation
+                logger.info("Phase 2: Analyzing root cause and generating hypotheses...")
+                hypothesis = self._analyze_and_hypothesize(evidence, context, current_task)
+                
+                # Phase 3: Smart Fix Strategy Decision
+                logger.info("Phase 3: Determining fix strategy...")
+                fix_result = self._execute_fix_strategy(hypothesis, context, current_task)
+                
+                # Phase 4: Validation
+                logger.info("Phase 4: Validating the fix...")
+                validation_result = self._validate_fix(context, current_task)
+                
+                if validation_result["success"]:
+                    logger.info(f"✅ Debugging succeeded after {iteration + 1} iterations")
+                    
+                    # Display transparency summary for user
+                    context.print_communication_summary()
+                    
+                    return AgentResponse(
+                        success=True,
+                        message=f"Successfully resolved issue after {iteration + 1} debugging iterations. Final solution: {hypothesis['solution_type']}",
+                        artifacts_generated=fix_result.get("artifacts_generated", [])
+                    )
                 else:
-                    logger.warning("Function calling not available, keeping original response")
-            
-            debug_results = json.loads(llm_response_str)
-
-            analysis = debug_results.get("root_cause_analysis")
-            suggested_fix = debug_results.get("suggested_fix_diff")
-
-            if not analysis or not suggested_fix:
-                raise ValueError("LLM response is missing 'root_cause_analysis' or 'suggested_fix_diff'.")
-
-        except NotImplementedError as e:
-            return AgentResponse(success=False, message=f"Cannot execute debugging: {e}")
-        except (json.JSONDecodeError, ValueError) as e:
-            return AgentResponse(success=False, message=f"Failed to parse LLM response for debugging. Error: {e}")
-        except Exception as e:
-            return AgentResponse(success=False, message=f"An unexpected error occurred during debugging: {e}")
-
-        # 3. Add the new analysis and diff artifacts to the context.
-        analysis_key = "root_cause_analysis.md"
-        fix_key = "suggested_fix.diff"
+                    logger.warning(f"❌ Fix attempt {iteration + 1} failed: {validation_result['message']}")
+                    # Store failure info for next iteration
+                    context.add_artifact(f"debug_iteration_{iteration}_failure.json", 
+                                       json.dumps(validation_result), current_task.task_id)
+                    
+            except Exception as e:
+                logger.error(f"Debugging iteration {iteration + 1} failed with exception: {e}")
+                if iteration == self.max_debug_iterations - 1:
+                    # Last iteration failed
+                    break
+                continue
         
-        context.add_artifact(analysis_key, analysis, current_task.task_id)
-        context.add_artifact(fix_key, suggested_fix, current_task.task_id)
-
+        # All iterations failed - still show transparency summary
+        context.print_communication_summary()
+        
         return AgentResponse(
-            success=True,
-            message="Successfully analyzed failure and generated a root cause analysis and a suggested fix.",
-            artifacts_generated=[analysis_key, fix_key]
+            success=False,
+            message=f"Unable to resolve issue after {self.max_debug_iterations} debugging iterations. Manual intervention required.",
+            artifacts_generated=[f"debug_iteration_{i}_failure.json" for i in range(self.max_debug_iterations)]
         )
+
+    def _gather_evidence(self, context: GlobalContext, current_task: TaskNode) -> Dict[str, Any]:
+        """Phase 1: Comprehensive evidence gathering using ToolingAgent and direct analysis."""
+        evidence = {
+            "initial_failure": {},
+            "system_context": {},
+            "code_context": {},
+            "environment_context": {},
+            "logs_and_traces": {}
+        }
+        
+        try:
+            # Get initial failure report
+            failed_report = context.get_artifact("failed_test_report.json")
+            if failed_report:
+                evidence["initial_failure"] = json.loads(failed_report) if isinstance(failed_report, str) else failed_report
+            
+            # Get code context
+            code_context = context.get_artifact("targeted_code_context.txt")
+            if code_context:
+                evidence["code_context"]["targeted_code"] = code_context
+            
+            # Use ToolingAgent if available for deeper evidence gathering
+            if "ToolingAgent" in self.agent_registry:
+                # Log the communication for transparency
+                self.log_communication(context, "ToolingAgent", "delegation", 
+                                     "Gather comprehensive debugging evidence", 
+                                     {"task_type": "evidence_gathering", "artifacts_available": list(context.artifacts.keys())},
+                                     current_task.task_id)
+                
+                tooling_agent = self.agent_registry["ToolingAgent"]
+                # Create a subtask for evidence gathering
+                evidence_task = TaskNode(
+                    goal="Gather comprehensive debugging evidence",
+                    assigned_agent="ToolingAgent",
+                    input_artifact_keys=list(context.artifacts.keys())
+                )
+                
+                tooling_result = tooling_agent.execute("Analyze system and environment for debugging", context, evidence_task)
+                if tooling_result.success:
+                    # Log successful response for transparency
+                    self.log_communication(context, "ToolingAgent", "response", 
+                                         f"Successfully gathered evidence: {len(tooling_result.artifacts_generated or [])} artifacts",
+                                         {"artifacts": tooling_result.artifacts_generated or [], "success": True},
+                                         current_task.task_id)
+                    # Extract additional evidence from tooling agent results
+                    for artifact_key in tooling_result.artifacts_generated or []:
+                        artifact_content = context.get_artifact(artifact_key)
+                        if artifact_content:
+                            evidence["environment_context"][artifact_key] = artifact_content
+                else:
+                    # Log failed response for transparency
+                    self.log_communication(context, "ToolingAgent", "error", 
+                                         f"Failed to gather evidence: {tooling_result.message}",
+                                         {"success": False, "error_message": tooling_result.message},
+                                         current_task.task_id)
+            
+            # Add system context directly if ToolingAgent not available
+            else:
+                import platform
+                import sys
+                evidence["system_context"] = {
+                    "platform": platform.platform(),
+                    "python_version": sys.version,
+                    "working_directory": context.workspace_path
+                }
+                
+            logger.info(f"Evidence gathered: {len(evidence)} categories")
+            return evidence
+            
+        except Exception as e:
+            logger.error(f"Evidence gathering failed: {e}")
+            return evidence
+
+    def _analyze_and_hypothesize(self, evidence: Dict[str, Any], context: GlobalContext, current_task: TaskNode) -> Dict[str, Any]:
+        """Phase 2: Root cause analysis and hypothesis generation using LLM."""
+        try:
+            # Build comprehensive analysis prompt
+            analysis_prompt = f"""
+            You are an expert debugging agent analyzing a complex system failure. Based on the comprehensive evidence below, 
+            provide a structured analysis with hypotheses and recommended fix strategy.
+
+            EVIDENCE:
+            {json.dumps(evidence, indent=2)}
+
+            Your analysis must be a valid JSON object with this structure:
+            {{
+                "root_cause_analysis": "Detailed explanation of what went wrong and why",
+                "primary_hypothesis": "Most likely cause of the issue",
+                "alternative_hypotheses": ["other possible causes"],
+                "confidence_level": "high|medium|low",
+                "error_category": "environment|dependencies|code|configuration|system",
+                "solution_type": "SURGICAL|DESIGN_CHANGE", 
+                "complexity_assessment": "simple|moderate|complex",
+                "recommended_strategy": "Specific approach to fix the issue",
+                "risk_assessment": "Potential risks and side effects of the fix"
+            }}
+            
+            Focus on actionable insights and be specific about the fix strategy.
+            """
+            
+            response = self.llm_client.invoke(analysis_prompt)
+            hypothesis = json.loads(response)
+            
+            # Store analysis for reference
+            context.add_artifact("debug_hypothesis.json", json.dumps(hypothesis, indent=2), current_task.task_id)
+            
+            logger.info(f"Generated hypothesis: {hypothesis.get('primary_hypothesis', 'Unknown')}")
+            logger.info(f"Solution type: {hypothesis.get('solution_type', 'Unknown')}")
+            
+            return hypothesis
+            
+        except Exception as e:
+            logger.error(f"Hypothesis generation failed: {e}")
+            # Fallback basic hypothesis
+            return {
+                "root_cause_analysis": f"Analysis failed due to: {e}",
+                "primary_hypothesis": "Unknown issue requiring manual investigation",
+                "solution_type": "DESIGN_CHANGE",
+                "complexity_assessment": "complex",
+                "recommended_strategy": "Manual debugging required"
+            }
+
+    def _execute_fix_strategy(self, hypothesis: Dict[str, Any], context: GlobalContext, current_task: TaskNode) -> Dict[str, Any]:
+        """Phase 3: Execute the chosen fix strategy via appropriate agents."""
+        solution_type = hypothesis.get("solution_type", "DESIGN_CHANGE")
+        
+        try:
+            if solution_type == "SURGICAL" and "CodeGenerationAgent" in self.agent_registry:
+                # Direct surgical fix via CodeGenerationAgent
+                logger.info("Executing surgical fix via CodeGenerationAgent")
+                
+                # Log the delegation for transparency
+                self.log_communication(context, "CodeGenerationAgent", "delegation", 
+                                     f"Apply surgical fix: {hypothesis.get('recommended_strategy', 'Fix the issue')}",
+                                     {"solution_type": "SURGICAL", "strategy": hypothesis.get('recommended_strategy')},
+                                     current_task.task_id)
+                
+                coder_agent = self.agent_registry["CodeGenerationAgent"]
+                fix_task = TaskNode(
+                    goal=f"Apply surgical fix: {hypothesis.get('recommended_strategy', 'Fix the issue')}",
+                    assigned_agent="CodeGenerationAgent",
+                    input_artifact_keys=["debug_hypothesis.json"]
+                )
+                
+                result = coder_agent.execute(hypothesis["recommended_strategy"], context, fix_task)
+                
+                # Log the response for transparency
+                response_type = "response" if result.success else "error"
+                self.log_communication(context, "CodeGenerationAgent", response_type, 
+                                     result.message,
+                                     {"success": result.success, "artifacts": result.artifacts_generated},
+                                     current_task.task_id)
+                return {"success": result.success, "artifacts_generated": result.artifacts_generated, "message": result.message}
+                
+            elif solution_type == "DESIGN_CHANGE" and "SpecGenerationAgent" in self.agent_registry and "CodeGenerationAgent" in self.agent_registry:
+                # Complex fix requiring specification first
+                logger.info("Executing design change via SpecAgent -> CoderAgent")
+                
+                # Log the delegation to SpecAgent for transparency
+                self.log_communication(context, "SpecGenerationAgent", "delegation", 
+                                     f"Create specification for: {hypothesis.get('recommended_strategy', 'Fix the issue')}",
+                                     {"solution_type": "DESIGN_CHANGE", "hypothesis": hypothesis.get('primary_hypothesis')},
+                                     current_task.task_id)
+                
+                spec_agent = self.agent_registry["SpecGenerationAgent"]
+                coder_agent = self.agent_registry["CodeGenerationAgent"]
+                
+                # First, generate specification
+                spec_task = TaskNode(
+                    goal=f"Create specification for: {hypothesis.get('recommended_strategy', 'Fix the issue')}",
+                    assigned_agent="SpecGenerationAgent",
+                    input_artifact_keys=["debug_hypothesis.json"]
+                )
+                
+                spec_result = spec_agent.execute(f"Create spec to resolve: {hypothesis['primary_hypothesis']}", context, spec_task)
+                
+                # Log the SpecAgent response
+                spec_response_type = "response" if spec_result.success else "error"
+                self.log_communication(context, "SpecGenerationAgent", spec_response_type, 
+                                     spec_result.message,
+                                     {"success": spec_result.success, "artifacts": spec_result.artifacts_generated},
+                                     current_task.task_id)
+                
+                if spec_result.success:
+                    # Log the delegation to CodeGenerationAgent for transparency
+                    self.log_communication(context, "CodeGenerationAgent", "delegation", 
+                                         "Implement the debugging fix specification",
+                                         {"input_artifacts": spec_result.artifacts_generated or [], "chain_source": "SpecGenerationAgent"},
+                                         current_task.task_id)
+                    
+                    # Then implement the specification
+                    code_task = TaskNode(
+                        goal="Implement the debugging fix specification",
+                        assigned_agent="CodeGenerationAgent", 
+                        input_artifact_keys=spec_result.artifacts_generated or []
+                    )
+                    
+                    code_result = coder_agent.execute("Implement the specification to fix the issue", context, code_task)
+                    
+                    # Log the CodeGenerationAgent response
+                    code_response_type = "response" if code_result.success else "error"
+                    self.log_communication(context, "CodeGenerationAgent", code_response_type, 
+                                         code_result.message,
+                                         {"success": code_result.success, "artifacts": code_result.artifacts_generated},
+                                         current_task.task_id)
+                    return {"success": code_result.success, "artifacts_generated": code_result.artifacts_generated, "message": code_result.message}
+                else:
+                    return {"success": False, "message": f"Specification generation failed: {spec_result.message}"}
+                    
+            else:
+                # Fallback: create manual fix recommendations
+                logger.warning("Required agents not available, creating manual fix recommendations")
+                
+                fix_recommendations = {
+                    "hypothesis": hypothesis,
+                    "manual_steps": [
+                        f"1. Address root cause: {hypothesis.get('primary_hypothesis', 'Unknown')}",
+                        f"2. Apply strategy: {hypothesis.get('recommended_strategy', 'Manual intervention')}",
+                        "3. Test the fix thoroughly",
+                        "4. Monitor for side effects"
+                    ],
+                    "risk_factors": hypothesis.get("risk_assessment", "Unknown risks")
+                }
+                
+                context.add_artifact("manual_fix_recommendations.json", json.dumps(fix_recommendations, indent=2), current_task.task_id)
+                return {"success": True, "artifacts_generated": ["manual_fix_recommendations.json"], "message": "Created manual fix recommendations"}
+                
+        except Exception as e:
+            logger.error(f"Fix strategy execution failed: {e}")
+            return {"success": False, "message": f"Fix execution failed: {e}"}
+
+    def _validate_fix(self, context: GlobalContext, current_task: TaskNode) -> Dict[str, Any]:
+        """Phase 4: Validate the fix using TestRunner and potentially TestGenerator."""
+        try:
+            if "TestRunnerAgent" in self.agent_registry:
+                logger.info("Validating fix using TestRunnerAgent")
+                
+                # Log the delegation for transparency
+                self.log_communication(context, "TestRunnerAgent", "delegation", 
+                                     "Validate that the debugging fix resolved the issue",
+                                     {"task_type": "validation", "purpose": "test fix"},
+                                     current_task.task_id)
+                
+                test_runner = self.agent_registry["TestRunnerAgent"]
+                validation_task = TaskNode(
+                    goal="Validate that the debugging fix resolved the issue",
+                    assigned_agent="TestRunnerAgent"
+                )
+                
+                result = test_runner.execute("Run tests to validate fix", context, validation_task)
+                
+                # Log the TestRunner response
+                test_response_type = "response" if result.success else "error"
+                self.log_communication(context, "TestRunnerAgent", test_response_type, 
+                                     result.message,
+                                     {"success": result.success, "artifacts": result.artifacts_generated},
+                                     current_task.task_id)
+                
+                if result.success:
+                    return {"success": True, "message": "Fix validated successfully - tests now pass"}
+                else:
+                    # Tests still failing, try to enhance test coverage if TestGenerator available
+                    if "TestGeneratorAgent" in self.agent_registry:
+                        logger.info("Tests still failing, enhancing test coverage")
+                        
+                        # Log the delegation for transparency
+                        self.log_communication(context, "TestGeneratorAgent", "delegation", 
+                                             "Generate additional tests to better validate the fix",
+                                             {"reason": "tests_still_failing", "purpose": "enhance_coverage"},
+                                             current_task.task_id)
+                        
+                        test_gen = self.agent_registry["TestGeneratorAgent"]
+                        gen_task = TaskNode(
+                            goal="Generate additional tests to better validate the fix",
+                            assigned_agent="TestGeneratorAgent"
+                        )
+                        
+                        gen_result = test_gen.execute("Generate targeted tests for debugging validation", context, gen_task)
+                        
+                        # Log the TestGenerator response
+                        gen_response_type = "response" if gen_result.success else "error"
+                        self.log_communication(context, "TestGeneratorAgent", gen_response_type, 
+                                             gen_result.message,
+                                             {"success": gen_result.success, "artifacts": gen_result.artifacts_generated},
+                                             current_task.task_id)
+                    
+                    return {"success": False, "message": f"Validation failed: {result.message}"}
+            else:
+                logger.warning("TestRunnerAgent not available for validation")
+                return {"success": False, "message": "Cannot validate - TestRunnerAgent not available"}
+                
+        except Exception as e:
+            logger.error(f"Fix validation failed: {e}")
+            return {"success": False, "message": f"Validation error: {e}"}
 
 
 # --- Self-Testing Block ---

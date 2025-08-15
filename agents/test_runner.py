@@ -20,11 +20,12 @@ class TestRunnerAgent(BaseAgent):
     or it can interpret existing pytest JSON reports if available.
     """
 
-    def __init__(self):
+    def __init__(self, agent_registry=None):
         super().__init__(
             name="TestRunnerAgent",
             description="Executes test suites using pytest and reports structured results."
         )
+        self.agent_registry = agent_registry or {}
 
     def execute(self, goal: str, context: GlobalContext, current_task: TaskNode) -> AgentResponse:
         logger.info(f"TestRunnerAgent executing with goal: '{goal}'")
@@ -54,6 +55,10 @@ class TestRunnerAgent(BaseAgent):
                 logger.error(msg)
                 # Save the detailed report for the DebuggingAgent to analyze
                 context.add_artifact("failed_test_report.json", results, current_task.task_id)
+                
+                # Hand over to DebuggingAgent if available
+                self._handover_to_debugging_agent(context, current_task, msg)
+                    
                 return AgentResponse(success=False, message=msg, artifacts_generated=["failed_test_report.json"])
             else:
                 msg = f"Test suite passed. All {total_tests} tests were successful."
@@ -63,7 +68,14 @@ class TestRunnerAgent(BaseAgent):
         except (json.JSONDecodeError, KeyError) as e:
             msg = f"Failed to parse pytest JSON report. The test command may have failed or produced malformed output. Error: {e}. Report content: {test_results_str[:500]}"
             logger.error(msg)
-            return AgentResponse(success=False, message=msg)
+            
+            # Create basic failure context for debugging agent
+            context.add_artifact("failed_test_report.json", {"error": "json_parse_failure", "details": str(e), "raw_output": test_results_str}, current_task.task_id)
+            
+            # Hand over to DebuggingAgent if available
+            self._handover_to_debugging_agent(context, current_task, msg)
+            
+            return AgentResponse(success=False, message=msg, artifacts_generated=["failed_test_report.json"])
 
     def _run_tests_independently(self, context: GlobalContext, current_task: TaskNode) -> AgentResponse:
         """Run tests independently by discovering test files in the workspace."""
@@ -72,6 +84,45 @@ class TestRunnerAgent(BaseAgent):
         # Ensure test environment is set up
         env_setup_result = self._setup_test_environment(workspace_path)
         if not env_setup_result["success"]:
+            # Check if we have debug context to pass to DebuggingAgent
+            if "debug_context" in env_setup_result:
+                debug_context = env_setup_result["debug_context"]
+                
+                # Create artifacts for DebuggingAgent
+                context.add_artifact("setup_error_context.json", json.dumps(debug_context, indent=2), current_task.task_id)
+                
+                # Create code context for requirements.txt analysis
+                try:
+                    requirements_content = Path(debug_context["requirements_file"]).read_text()
+                    context.add_artifact("targeted_code_context.txt", 
+                                       f"# Requirements file content:\n{requirements_content}\n\n# Error context:\n{json.dumps(debug_context, indent=2)}", 
+                                       current_task.task_id)
+                except Exception as e:
+                    logger.warning(f"Could not read requirements file for context: {e}")
+                    context.add_artifact("targeted_code_context.txt", 
+                                       f"# Error context (requirements file unreadable):\n{json.dumps(debug_context, indent=2)}", 
+                                       current_task.task_id)
+                
+                # Create failed test report format for DebuggingAgent compatibility
+                failed_report = {
+                    "summary": {"total": 0, "passed": 0, "failed": 1},
+                    "error_type": "environment_setup_failure",
+                    "details": debug_context
+                }
+                context.add_artifact("failed_test_report.json", json.dumps(failed_report, indent=2), current_task.task_id)
+                
+                # Hand over to DebuggingAgent with detailed context
+                self._handover_to_debugging_agent(context, current_task, f"{env_setup_result['message']} Artifacts created for DebuggingAgent analysis.")
+                
+                return AgentResponse(
+                    success=False, 
+                    message=f"{env_setup_result['message']} Artifacts created for DebuggingAgent analysis.",
+                    artifacts_generated=["setup_error_context.json", "targeted_code_context.txt", "failed_test_report.json"]
+                )
+            
+            # Hand over to DebuggingAgent for environment setup failures without debug context
+            self._handover_to_debugging_agent(context, current_task, env_setup_result["message"])
+            
             return AgentResponse(success=False, message=env_setup_result["message"])
         
         # Look for tests in the workspace
@@ -112,6 +163,10 @@ class TestRunnerAgent(BaseAgent):
         if total_failed > 0 or failed_files > 0:
             msg = f"Test suite failed. {total_failed} out of {total_test_functions} tests failed across {failed_files} files."
             logger.error(msg)
+            
+            # Hand over to DebuggingAgent if available
+            self._handover_to_debugging_agent(context, current_task, msg)
+                
             return AgentResponse(success=False, message=msg, artifacts_generated=["test_execution_report.json"])
         else:
             msg = f"Test suite passed. All {total_test_functions} tests passed across {len(test_files)} files."
@@ -365,8 +420,27 @@ class TestRunnerAgent(BaseAgent):
                 result = subprocess.run([str(pip_exe), "install", "-r", str(requirements_path)], 
                                       capture_output=True, text=True)
                 if result.returncode != 0:
-                    logger.warning(f"Failed to install some requirements: {result.stderr}")
-                    # Don't fail completely - some requirements might not be test-related
+                    logger.error(f"Requirements installation failed: {result.stderr}")
+                    
+                    # Create debugging context for DebuggingAgent analysis
+                    error_context = {
+                        "error_type": "requirements_installation_failure",
+                        "command": f"{pip_exe} install -r {requirements_path}",
+                        "exit_code": result.returncode,
+                        "stdout": result.stdout,
+                        "stderr": result.stderr,
+                        "requirements_file": str(requirements_path),
+                        "environment_type": "virtual_environment",
+                        "venv_path": str(venv_path),
+                        "python_version": sys.version,
+                        "platform": sys.platform
+                    }
+                    
+                    return {
+                        "success": False, 
+                        "message": f"Requirements installation failed. Created debugging context for analysis.",
+                        "debug_context": error_context
+                    }
             
             # Store the python executable for later use
             self._venv_python = str(venv_python)
@@ -374,6 +448,45 @@ class TestRunnerAgent(BaseAgent):
             
         except Exception as e:
             return {"success": False, "message": f"Error setting up test environment: {e}"}
+            
+    def _handover_to_debugging_agent(self, context: GlobalContext, current_task: TaskNode, failure_message: str):
+        """
+        Hand over control to the DebuggingAgent with all failure context.
+        The DebuggingAgent will take full control of the debugging process.
+        """
+        if "DebuggingAgent" not in self.agent_registry:
+            logger.info("DebuggingAgent not available in registry, cannot hand over for debugging")
+            return
+            
+        try:
+            logger.info("🔧 Handing over to DebuggingAgent for comprehensive failure analysis...")
+            
+            # Log the handover communication for transparency
+            self.log_communication(context, "DebuggingAgent", "handover", 
+                                 f"Debug test failures: {failure_message}",
+                                 {"handover_reason": "test_failures", "failure_details": failure_message},
+                                 current_task.task_id)
+            
+            debugging_agent = self.agent_registry["DebuggingAgent"]
+            
+            # Create debugging task with all available context, inheriting from current task
+            debug_task = TaskNode(
+                goal=f"Debug test failures: {failure_message}",
+                assigned_agent="DebuggingAgent",
+                input_artifact_keys=["failed_test_report.json", "test_execution_report.json"],
+                task_id=f"debug_{current_task.task_id}"
+            )
+            
+            # Hand over control - DebuggingAgent takes it from here
+            debugging_agent.execute(
+                f"Analyze and fix test failures: {failure_message}", 
+                context, 
+                debug_task
+            )
+            logger.info("✅ Successfully handed over control to DebuggingAgent")
+                
+        except Exception as e:
+            logger.error(f"💥 Error during handover to DebuggingAgent: {e}")
 
 # --- Self-Testing Block ---
 if __name__ == "__main__":
@@ -390,7 +503,7 @@ if __name__ == "__main__":
             if self.test_workspace_path.exists():
                 shutil.rmtree(self.test_workspace_path)
             self.context = GlobalContext(workspace_path=str(self.test_workspace_path))
-            self.agent = TestRunnerAgent()
+            self.agent = TestRunnerAgent(agent_registry={})
             self.task = TaskNode(goal="Run tests", assigned_agent="TestRunnerAgent", input_artifact_keys=["pytest_output.json"])
 
         def tearDown(self):

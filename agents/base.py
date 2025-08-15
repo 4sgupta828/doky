@@ -2,7 +2,10 @@
 import logging
 import concurrent.futures
 from abc import ABC, abstractmethod
-from typing import List, Callable, Any
+from typing import List, Callable, Any, Dict, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from core.context import GlobalContext
 
 # The base agent needs to know the "shape" of the data it will receive and return.
 # By importing these types, we can use them in method signatures for clarity and
@@ -106,6 +109,10 @@ class BaseAgent(ABC):
         """Helper method for agents to report intermediate outputs."""
         if self.progress_tracker and self.current_task_id:
             self.progress_tracker.report_intermediate_output(self.current_task_id, output_type, content)
+    
+    def log_communication(self, context: 'GlobalContext', to_agent: str, message_type: str, content: str, context_data: Dict[str, Any] = None, task_id: str = None):
+        """Helper method for agents to log inter-agent communications for transparency."""
+        context.log_agent_communication(self.name, to_agent, message_type, content, context_data, task_id)
     
     def complete_step(self, output=None):
         """Helper method for agents to mark steps as completed."""

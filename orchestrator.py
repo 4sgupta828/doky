@@ -105,7 +105,27 @@ class Orchestrator:
                         
             except Exception as e:
                 logging.error(f"Failed to load agent '{agent_name}': {e}", exc_info=True)
+        
+        # Second pass: Inject agent registry into agents that need it
+        self._inject_agent_registry(registry)
+        
         return registry
+        
+    def _inject_agent_registry(self, registry: Dict[str, BaseAgent]):
+        """Second pass to inject agent registry into agents that need cross-agent capabilities."""
+        # TestRunnerAgent needs access to DebuggingAgent
+        if "TestRunnerAgent" in registry:
+            test_runner = registry["TestRunnerAgent"]
+            if hasattr(test_runner, 'agent_registry'):
+                test_runner.agent_registry = registry
+                logging.info("✅ Injected agent registry into TestRunnerAgent for debugging integration")
+        
+        # DebuggingAgent needs access to other agents too
+        if "DebuggingAgent" in registry:
+            debugging_agent = registry["DebuggingAgent"]
+            if hasattr(debugging_agent, 'agent_registry'):
+                debugging_agent.agent_registry = registry
+                logging.info("✅ Injected agent registry into DebuggingAgent for cross-agent orchestration")
 
     def plan_mission(self, mission_goal: str) -> AgentResponse:
         """
