@@ -18,18 +18,27 @@ class InteractiveSession:
     entire Read-Plan-Execute-Loop (RPEL) with a refinement stage.
     """
 
-    def __init__(self, workspace_path: Optional[str] = None):
+    def __init__(self, workspace_path: Optional[str] = None, resume_snapshot: Optional[str] = None):
         """
         Initializes the interactive session.
 
         Args:
             workspace_path: The file path for the mission's workspace. If None,
                           auto-generates a timestamped directory in /Users/sgupta/
+            resume_snapshot: Path to snapshot file to resume from (for crash recovery)
         """
         try:
             self.ui = CollaborationUI()
-            self.orchestrator = Orchestrator(workspace_path=workspace_path, ui_interface=self.ui)
-            self.global_context = self.orchestrator.global_context
+            
+            # Handle session resume from snapshot
+            if resume_snapshot:
+                from core.context import GlobalContext
+                self.global_context = GlobalContext.load_from_snapshot(resume_snapshot)
+                self.orchestrator = Orchestrator(global_context=self.global_context, ui_interface=self.ui)
+                self.ui.display_system_message(f"Session resumed from snapshot: {resume_snapshot}")
+            else:
+                self.orchestrator = Orchestrator(workspace_path=workspace_path, ui_interface=self.ui)
+                self.global_context = self.orchestrator.global_context
             logging.info("InteractiveSession initialized successfully.")
         except Exception as e:
             logging.critical("Failed to initialize core components for InteractiveSession.", exc_info=True)
@@ -164,7 +173,7 @@ class InteractiveSession:
 
         self.ui.display_system_message(f"Directly invoking {agent_name}...")
         response = self.orchestrator.execute_single_task(goal, agent_name)
-        self.ui.display_direct_command_result(agent_name, response)
+        self.ui.display_direct_command_result(agent_name, response, self.global_context)
     
     def _save_session_data(self):
         """Save session data and create a final snapshot before exit."""

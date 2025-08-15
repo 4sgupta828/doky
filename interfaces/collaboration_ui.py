@@ -10,6 +10,10 @@ from typing import Dict, Any
 from core.context import GlobalContext
 from core.models import TaskGraph, TaskNode, AgentResponse
 from utils.input_handler import get_input_handler
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from core.context import GlobalContext
 
 # Get a logger instance for this module
 logger = logging.getLogger(__name__)
@@ -175,7 +179,34 @@ class CollaborationUI:
         print(help_text)
         print("="*80)
 
-    def display_direct_command_result(self, agent_name: str, response: AgentResponse):
+    def _display_artifact_content(self, artifact_key: str, content: Any):
+        """Helper method to format and display artifact content."""
+        print(f"\n   📄 {Style.BOLD}{Style.Fg.BLUE}{artifact_key}:{Style.RESET}")
+        print("   " + "─" * 76)
+        
+        if isinstance(content, str):
+            # For text content, display with proper indentation
+            lines = content.split('\n')
+            for line in lines[:50]:  # Limit to first 50 lines to avoid overwhelming output
+                print(f"   {line}")
+            if len(lines) > 50:
+                print(f"   {Style.Fg.GRAY}... ({len(lines) - 50} more lines){Style.RESET}")
+        elif isinstance(content, (dict, list)):
+            # For structured data, display as formatted JSON
+            import json
+            json_str = json.dumps(content, indent=2, ensure_ascii=False)
+            lines = json_str.split('\n')
+            for line in lines[:30]:  # Limit to first 30 lines for JSON
+                print(f"   {line}")
+            if len(lines) > 30:
+                print(f"   {Style.Fg.GRAY}... ({len(lines) - 30} more lines){Style.RESET}")
+        else:
+            # For other types, show string representation
+            print(f"   {str(content)[:500]}{'...' if len(str(content)) > 500 else ''}")
+        
+        print("   " + "─" * 76)
+
+    def display_direct_command_result(self, agent_name: str, response: AgentResponse, context: 'GlobalContext' = None):
         """Displays the formatted result of a single agent's execution."""
         print("\n" + "-"*80)
         if response.success:
@@ -187,6 +218,15 @@ class CollaborationUI:
         
         if response.artifacts_generated:
             print(f"   - {Style.BOLD}Artifacts Created/Updated:{Style.RESET} {', '.join(response.artifacts_generated)}")
+            
+            # Display artifact content if context is provided
+            if context:
+                for artifact_key in response.artifacts_generated:
+                    artifact_content = context.get_artifact(artifact_key)
+                    if artifact_content is not None:
+                        self._display_artifact_content(artifact_key, artifact_content)
+                    else:
+                        print(f"   {Style.Fg.YELLOW}⚠️ Artifact '{artifact_key}' not found in context{Style.RESET}")
         print("-"*80)
         
 # --- Self-Testing Block ---
@@ -203,9 +243,9 @@ if __name__ == "__main__":
         def setUp(self):
             self.ui = CollaborationUI()
             self.context = GlobalContext()
-            self.context.task_graph.add_task(TaskNode(task_id="task_1", goal="Completed task", status="success"))
-            self.context.task_graph.add_task(TaskNode(task_id="task_2", goal="Running task", status="running"))
-            self.context.task_graph.add_task(TaskNode(task_id="task_3", goal="Pending task", status="pending"))
+            self.context.task_graph.add_task(TaskNode(task_id="task_1", goal="Completed task", assigned_agent="TestAgent", status="success"))
+            self.context.task_graph.add_task(TaskNode(task_id="task_2", goal="Running task", assigned_agent="TestAgent", status="running"))
+            self.context.task_graph.add_task(TaskNode(task_id="task_3", goal="Pending task", assigned_agent="TestAgent", status="pending"))
 
         @patch('builtins.print')
         def test_display_status_formatting(self, mock_print):
@@ -239,5 +279,23 @@ if __name__ == "__main__":
             result = self.ui.prompt_for_confirmation("Apply code changes?")
             self.assertFalse(result)
             logger.info("✅ test_prompt_for_confirmation_no: PASSED")
+
+        @patch('builtins.print')
+        def test_artifact_display(self, mock_print):
+            print("\n--- [Test Case 4: Artifact Display] ---")
+            # Create a test response with artifacts
+            response = AgentResponse(success=True, message="Generated spec", artifacts_generated=["test_spec.md"])
+            
+            # Add test artifact to context
+            self.context.add_artifact("test_spec.md", "# Test Specification\nThis is a test spec.", "test_task")
+            
+            # Display the result
+            self.ui.display_direct_command_result("TestAgent", response, self.context)
+            
+            # Verify artifact content is displayed
+            output = "\n".join([str(call.args[0]) for call in mock_print.call_args_list if call.args])
+            self.assertIn("test_spec.md", output)
+            self.assertIn("Test Specification", output)
+            logger.info("✅ test_artifact_display: PASSED")
 
     unittest.main(argv=['first-arg-is-ignored'], exit=False)

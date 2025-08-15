@@ -40,6 +40,12 @@ def main(args: List[str]) -> None:
         default=None,
         help="The directory path for the mission's workspace. If not specified, auto-generates a timestamped directory."
     )
+    parser.add_argument(
+        "--resume",
+        type=str,
+        default=None,
+        help="Path to a snapshot file to resume from (for crash recovery)."
+    )
 
     # We check for a special '--test' flag to run the built-in test suite.
     if "--test" in args:
@@ -48,10 +54,11 @@ def main(args: List[str]) -> None:
 
     parsed_args = parser.parse_args(args)
     workspace_path = parsed_args.workspace
+    resume_snapshot = parsed_args.resume
 
     # 3. Instantiate and start the interactive session.
     try:
-        session = InteractiveSession(workspace_path=workspace_path)
+        session = InteractiveSession(workspace_path=workspace_path, resume_snapshot=resume_snapshot)
         session.start()
 
     except Exception as e:

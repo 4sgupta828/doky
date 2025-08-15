@@ -1,7 +1,6 @@
 # agents/spec_generator.py
-import json
 import logging
-from typing import Dict, Any
+from typing import Any
 
 # Foundational dependencies
 from .base import BaseAgent
@@ -33,13 +32,20 @@ class SpecGenerationAgent(BaseAgent):
         )
         self.llm_client = llm_client or LLMClient()
 
-    def _build_prompt(self, requirements: str) -> str:
+    def _build_prompt(self, requirements: str, is_fallback: bool = False) -> str:
         """Constructs a precise prompt to guide the LLM in generating a technical spec."""
+        
+        if is_fallback:
+            content_type = "user goal"
+            content_description = "the following user goal into a detailed technical specification"
+        else:
+            content_type = "clarified requirements"  
+            content_description = "the following clarified user requirements into a detailed technical specification"
+            
         return f"""
-        You are an expert software architect. Your task is to convert the following
-        clarified user requirements into a detailed technical specification in Markdown format.
+        You are an expert software architect. Your task is to convert {content_description} in Markdown format.
 
-        **Clarified Requirements:**
+        **{content_type.title()}:**
         ---
         {requirements}
         ---
@@ -49,6 +55,8 @@ class SpecGenerationAgent(BaseAgent):
         2.  Define the **API Endpoints** with HTTP methods, paths, request bodies, and success/error responses.
         3.  Describe the core **Business Logic** for each endpoint in clear, unambiguous terms.
         4.  The output MUST be a single, well-formatted Markdown document. Do not include any other text or commentary.
+        
+        {'' if not is_fallback else 'Note: Since only the user goal was provided, make reasonable assumptions about requirements and clearly document any assumptions made in the specification.'}
         """
 
     def execute(self, goal: str, context: GlobalContext, current_task: TaskNode) -> AgentResponse:
@@ -57,13 +65,21 @@ class SpecGenerationAgent(BaseAgent):
         input_artifact_key = current_task.input_artifact_keys[0] if current_task.input_artifact_keys else "clarified_requirements.md"
         requirements_doc = context.get_artifact(input_artifact_key)
 
+        # Handle missing inputs gracefully - work with what we have
+        is_fallback = False
         if not requirements_doc:
-            msg = f"Missing required artifact '{input_artifact_key}'. Cannot generate spec."
-            logger.error(msg)
-            return AgentResponse(success=False, message=msg)
+            # No clarified requirements available - work directly from the goal
+            requirements_doc = f"User Goal: {goal}\n\nNote: No clarified requirements were available, so generating spec directly from the user's goal."
+            is_fallback = True
+            logger.info(f"No artifact '{input_artifact_key}' found. Working directly from goal: '{goal}'")
+            context.log_event("spec_generator_fallback", {
+                "reason": "missing_clarified_requirements", 
+                "working_from": "goal_only",
+                "expected_artifact": input_artifact_key
+            })
 
         try:
-            prompt = self._build_prompt(requirements_doc)
+            prompt = self._build_prompt(requirements_doc, is_fallback=is_fallback)
             technical_spec = self.llm_client.invoke(prompt)
 
             if not technical_spec or not isinstance(technical_spec, str):
@@ -125,14 +141,24 @@ if __name__ == "__main__":
             self.assertEqual(self.context.get_artifact("technical_spec.md"), mock_spec_output)
             logger.info("✅ test_successful_spec_generation: PASSED")
 
-        def test_failure_on_missing_artifact(self):
-            print("\n--- [Test Case 2: SpecGenerationAgent Missing Artifact] ---")
+        def test_fallback_on_missing_artifact(self):
+            print("\n--- [Test Case 2: SpecGenerationAgent Fallback Behavior] ---")
+            mock_spec_output = "# Technical Specification: Fallback Generated\n## Based on User Goal Only"
+            self.mock_llm_client.invoke.return_value = mock_spec_output
+            
             empty_context = GlobalContext(workspace_path=self.test_workspace_path)
             response = self.agent.execute(self.task.goal, empty_context, self.task)
 
-            self.assertFalse(response.success)
-            self.assertIn("Missing required artifact", response.message)
-            self.mock_llm_client.invoke.assert_not_called()
-            logger.info("✅ test_failure_on_missing_artifact: PASSED")
+            # Agent should now succeed by using fallback behavior
+            self.assertTrue(response.success)
+            self.assertIn("Successfully generated", response.message)
+            self.mock_llm_client.invoke.assert_called_once()
+            
+            # Check that the prompt included fallback content
+            called_prompt = self.mock_llm_client.invoke.call_args[0][0]
+            self.assertIn("User Goal:", called_prompt)
+            self.assertIn("reasonable assumptions", called_prompt)
+            
+            logger.info("✅ test_fallback_on_missing_artifact: PASSED")
 
     unittest.main(argv=['first-arg-is-ignored'], exit=False)

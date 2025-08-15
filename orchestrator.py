@@ -20,7 +20,7 @@ class Orchestrator:
     with the AdaptiveEngine when failures occur. It acts purely as a conductor.
     """
 
-    def __init__(self, workspace_path: Optional[str] = None, ui_interface: Any = None):
+    def __init__(self, workspace_path: Optional[str] = None, ui_interface: Any = None, global_context: Optional[GlobalContext] = None):
         """
         Initializes the Orchestrator and all core components of the agent collective.
         This setup phase is critical for establishing the mission's environment.
@@ -29,8 +29,14 @@ class Orchestrator:
             workspace_path: The directory path for the mission's workspace. If None,
                           auto-generates a timestamped directory in /Users/sgupta/
             ui_interface: The UI interface for user interaction (optional).
+            global_context: Existing GlobalContext to use (for crash recovery), overrides workspace_path
         """
         self.ui_interface = ui_interface
+        
+        # Use provided context or create new one
+        if global_context:
+            self.global_context = global_context
+        
         # Load environment variables from .env file
         try:
             from dotenv import load_dotenv
@@ -51,7 +57,9 @@ class Orchestrator:
         self.llm_client = create_llm_client()
         logging.info(f"Initialized LLM client: {self.llm_client.provider} with model {self.llm_client.model}")
         
-        self.global_context = GlobalContext(workspace_path=workspace_path)
+        # Use provided context or create new one
+        if not hasattr(self, 'global_context') or self.global_context is None:
+            self.global_context = GlobalContext(workspace_path=workspace_path)
         self.adaptive_engine = AdaptiveEngine()
         self.agent_registry: Dict[str, BaseAgent] = self._load_agents()
         logging.info(f"Orchestrator initialized with agents: {list(self.agent_registry.keys())}")

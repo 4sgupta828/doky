@@ -62,6 +62,10 @@ class GlobalContext:
         self.artifacts: Dict[str, Any] = {}
         self.mission_log: List[Dict[str, Any]] = []
         
+        # Auto-save configuration
+        self.auto_save_enabled = True
+        self.last_auto_save = datetime.now()
+        
         # Initialize session data directory
         from config import config
         self.session_dir = config.get_workspace_session_dir(workspace_path)
@@ -89,6 +93,10 @@ class GlobalContext:
             "artifact_added",
             {"key": key, "source_task_id": source_task_id, "type": str(type(value).__name__)}
         )
+        
+        # Auto-save after artifact updates
+        if self.auto_save_enabled:
+            self._auto_save_if_needed()
 
     def get_artifact(self, key: str, default: Any = None) -> Any:
         """
@@ -105,6 +113,14 @@ class GlobalContext:
             logger.warning(f"Artifact with key '{key}' not found. Returning default value.")
         return self.artifacts.get(key, default)
     
+    def _auto_save_if_needed(self):
+        """Performs an auto-save if enough time has passed since the last one."""
+        now = datetime.now()
+        if (now - self.last_auto_save).total_seconds() >= 30:  # Auto-save every 30 seconds
+            self.save_snapshot()
+            self.last_auto_save = now
+            logger.debug("Auto-save completed")
+    
     def log_event(self, event_type: str, details: Dict[str, Any]):
         """
         Records a significant event in the mission log for transparency and debugging.
@@ -116,7 +132,84 @@ class GlobalContext:
         log_entry = {"event": event_type, "details": details}
         self.mission_log.append(log_entry)
         logger.debug(f"Logged event: {log_entry}")
+        
+        # Auto-save after significant events
+        if self.auto_save_enabled and event_type in ["task_completed", "task_failed", "agent_execution_finished"]:
+            self._auto_save_if_needed()
 
+    @classmethod
+    def load_from_snapshot(cls, snapshot_path: str) -> 'GlobalContext':
+        """
+        Loads a GlobalContext from a previously saved snapshot file.
+        This enables crash recovery and session resumption.
+        
+        Args:
+            snapshot_path: Path to the snapshot JSON file
+            
+        Returns:
+            A new GlobalContext instance restored from the snapshot
+        """
+        try:
+            with open(snapshot_path, 'r', encoding='utf-8') as f:
+                snapshot_data = json.load(f)
+            
+            logger.info(f"Loading context from snapshot: {snapshot_path}")
+            
+            # Create new context with the same workspace
+            context = cls(workspace_path=snapshot_data["workspace_path"])
+            
+            # Restore task graph
+            context.task_graph = TaskGraph(**snapshot_data["task_graph"])
+            
+            # Restore mission log 
+            context.mission_log = snapshot_data["mission_log"]
+            
+            # Note: Artifacts are not fully restored from snapshots as they may be large
+            # This is a design choice - in a real crash recovery, we'd want to restore 
+            # from the actual artifact files or implement full artifact serialization
+            
+            context.log_event(
+                "context_restored_from_snapshot", 
+                {"snapshot_path": snapshot_path, "timestamp": snapshot_data.get("timestamp")}
+            )
+            
+            logger.info("Context successfully restored from snapshot")
+            return context
+            
+        except FileNotFoundError:
+            logger.error(f"Snapshot file not found: {snapshot_path}")
+            raise
+        except json.JSONDecodeError as e:
+            logger.error(f"Invalid snapshot file format: {e}")
+            raise
+        except Exception as e:
+            logger.error(f"Failed to load snapshot: {e}")
+            raise
+    
+    @staticmethod
+    def list_available_snapshots(workspace_path: str) -> List[str]:
+        """
+        Lists all available snapshot files for a given workspace.
+        
+        Args:
+            workspace_path: Path to the workspace to search for snapshots
+            
+        Returns:
+            List of snapshot file paths, sorted by modification time (newest first)
+        """
+        from config import config
+        session_dir = config.get_workspace_session_dir(workspace_path)
+        
+        if not session_dir.exists():
+            return []
+        
+        snapshot_files = list(session_dir.glob("snapshot_*.json"))
+        
+        # Sort by modification time, newest first
+        snapshot_files.sort(key=lambda x: x.stat().st_mtime, reverse=True)
+        
+        return [str(f) for f in snapshot_files]
+    
     def save_snapshot(self, file_path: Optional[str] = None):
         """
         Saves the current state of the GlobalContext to a JSON file.
