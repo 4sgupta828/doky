@@ -134,8 +134,8 @@ def subtract(a, b)
     # Define simple, realistic test goals for each agent type
     test_goals = {
         "PlannerAgent": "Create a simple todo app",
-        "IntentClarificationAgent": "I want to build an app, but I'm not sure what kind",
-        "SpecGenerationAgent": "Build a simple calculator application", 
+        "IntentValidationAgent": "I want to build an app, but I'm not sure what kind",
+        "SpecValidationAgent": "Build a simple calculator application", 
         "CodeManifestAgent": "Python calculator with add/subtract functions",
         "CodeGenerationAgent": "Write a Python function that adds two numbers",
         "TestGenerationAgent": "Create tests for an add function",

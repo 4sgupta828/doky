@@ -70,7 +70,7 @@ class LearningCore:
         **JSON Output Format Example:**
         {{
             "successful_patterns": [
-                "For new feature creation, the following agent sequence is effective: IntentClarificationAgent -> SpecGenerationAgent -> CodeManifestAgent -> CodeGenerationAgent."
+                "For new feature creation, the following agent sequence is effective: IntentValidationAgent -> SpecValidationAgent -> CodeManifestAgent -> CodeGenerationAgent."
             ],
             "recovery_heuristics": [
                 "If a `TestRunnerAgent` task fails, the recovery plan should immediately start with a `DebuggingAgent` task to analyze the test report."

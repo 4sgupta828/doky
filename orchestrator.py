@@ -83,8 +83,14 @@ class Orchestrator:
                         agent_capabilities=all_capabilities, 
                         llm_client=self.llm_client
                     )
-                elif agent_name == "IntentClarificationAgent":
-                    # IntentClarificationAgent needs both LLM client and UI interface
+                elif agent_name == "IntentValidationAgent":
+                    # IntentValidationAgent needs both LLM client and UI interface
+                    registry[agent_name] = agent_class(
+                        llm_client=self.llm_client,
+                        ui_interface=self.ui_interface
+                    )
+                elif agent_name == "SpecValidationAgent":
+                    # SpecValidationAgent needs both LLM client and UI interface
                     registry[agent_name] = agent_class(
                         llm_client=self.llm_client,
                         ui_interface=self.ui_interface

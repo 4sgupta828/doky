@@ -8,8 +8,8 @@ from .base import BaseAgent
 
 # Import every concrete agent implementation from its respective module.
 from .planner import PlannerAgent
-from .clarifier import IntentClarificationAgent
-from .spec_generator import SpecGenerationAgent
+from .clarifier import IntentValidationAgent
+from .spec_generator import SpecValidationAgent
 from .code_manifest import CodeManifestAgent
 from .coder import CodeGenerationAgent
 from .test_generator import TestGenerationAgent
@@ -31,10 +31,10 @@ AGENT_REGISTRY: Dict[str, Type[BaseAgent]] = {
     # Foundational Agents
     "PlannerAgent": PlannerAgent,
     "PlanRefinementAgent": PlanRefinementAgent,     
-    "IntentClarificationAgent": IntentClarificationAgent,
+    "IntentValidationAgent": IntentValidationAgent,
 
     # Architecture & Design Agents
-    "SpecGenerationAgent": SpecGenerationAgent,
+    "SpecValidationAgent": SpecValidationAgent,
     "CodeManifestAgent": CodeManifestAgent,
 
     # Development & Testing Agents
@@ -56,8 +56,8 @@ AGENT_ALIASES: Dict[str, str] = {
     "@help": "HelpAgent", # A virtual agent for the help command
     "@planner": "PlannerAgent",
     "@refiner": "PlanRefinementAgent",
-    "@clarify": "IntentClarificationAgent",
-    "@spec": "SpecGenerationAgent",
+    "@clarify": "IntentValidationAgent",
+    "@spec": "SpecValidationAgent",
     "@manifest": "CodeManifestAgent",
     "@coder": "CodeGenerationAgent",
     "@testgen": "TestGenerationAgent",

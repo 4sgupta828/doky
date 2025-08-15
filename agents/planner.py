@@ -221,14 +221,14 @@ class PlannerAgent(BaseAgent):
                 "task_clarify_intent": {{
                     "task_id": "task_clarify_intent",
                     "goal": "Clarify API requirements with the user.",
-                    "assigned_agent": "IntentClarificationAgent",
+                    "assigned_agent": "IntentValidationAgent",
                     "dependencies": [],
                     "output_artifact_keys": ["clarified_requirements.md"]
                 }},
                 "task_generate_spec": {{
                     "task_id": "task_generate_spec",
                     "goal": "Create a detailed technical specification.",
-                    "assigned_agent": "SpecGenerationAgent",
+                    "assigned_agent": "SpecValidationAgent",
                     "dependencies": ["task_clarify_intent"],
                     "input_artifact_keys": ["clarified_requirements.md"],
                     "output_artifact_keys": ["technical_spec.md"]

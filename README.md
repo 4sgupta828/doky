@@ -46,8 +46,8 @@ graph TD
 | Agent / Component | Role | Responsibilities |
 | :--- | :--- | :--- |
 | **PlannerAgent** | The Engineering Manager | Creates and refines the high-level `TaskGraph` based on user goals and runtime feedback. |
-| **IntentClarificationAgent** | The Business Analyst | Interacts with the user to resolve ambiguity and produce clear, actionable requirements. |
-| **SpecGenerationAgent** | The Architect | Translates requirements into a detailed technical specification and system design. |
+| **IntentValidationAgent** | The Business Analyst | Presents understanding of user intent and validates assumptions with the user. |
+| **SpecValidationAgent** | The Architect | Presents technical specification and validates the approach with the user. |
 | **CodeManifestAgent** | The Tech Lead | Defines the file and directory structure for the project based on the technical spec. |
 | **CodeGenerationAgent** | The Core Developer | Writes, modifies, and refactors application code according to the spec and assigned tasks. |
 | **TestGenerationAgent** | The QA Engineer | Creates unit and integration tests to validate the generated code. |
@@ -131,7 +131,7 @@ Here’s a step-by-step example of how the agent collective handles a mission.
 
 1.  **Planning**: The `Orchestrator` starts and invokes the `PlannerAgent`. The planner analyzes the goal and creates a `TaskGraph` with several dependent tasks: `Clarify Intent` -\> `Generate Spec` -\> `Generate Manifest` -\> `Generate Code` -\> `Generate Tests` -\> `Run Tests`.
 
-2.  **Clarification**: The `IntentClarificationAgent` is executed. It uses an LLM to identify ambiguities in the goal and asks the user questions via the terminal:
+2.  **Intent Validation**: The `IntentValidationAgent` is executed. It presents its understanding of the goal and asks the user to validate or refine it:
 
     > **ACTION REQUIRED**
     > The agent needs your input to proceed:
@@ -140,7 +140,7 @@ Here’s a step-by-step example of how the agent collective handles a mission.
 
     > Your response: **JWT**
 
-3.  **Architecture**: The `SpecGenerationAgent` and `CodeManifestAgent` run in sequence, producing `technical_spec.md` and `file_manifest.json` artifacts.
+3.  **Architecture**: The `SpecValidationAgent` and `CodeManifestAgent` run in sequence, producing `technical_spec.md` and `file_manifest.json` artifacts.
 
 4.  **Development**: The `CodeGenerationAgent` reads the spec and manifest and writes the necessary Python files (`models.py`, `routes.py`, etc.) to the workspace. Each file write is a separate Git commit, tagged with the task ID.
 

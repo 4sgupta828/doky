@@ -163,18 +163,24 @@ class CollaborationUI:
             print()
         
         print("="*80)
-        print("Options:")
-        print("  approve - Execute this plan")
-        print("  refine  - Modify or improve the plan") 
-        print("  cancel  - Cancel and start over")
+        print("Review the plan above:")
+        print("  • Press ENTER to approve and execute this plan")
+        print("  • Type any feedback to refine the plan")
+        print("  • Type 'cancel' to cancel and start over")
         print("-" * 80)
         
-        while True:
-            choice = self.input_handler.prompt("Your choice (approve/refine/cancel): ").lower()
-            if choice in ["approve", "refine", "cancel"]:
-                logger.info(f"User chose: {choice}")
-                return choice
-            print("Please enter 'approve', 'refine', or 'cancel'")
+        user_input = self.input_handler.prompt("Your response: ").strip()
+        
+        # Empty input (just Enter) means approval
+        if not user_input:
+            logger.info("User approved the plan (empty input)")
+            return "approve"
+        elif user_input.lower() == "cancel":
+            logger.info("User cancelled the plan")
+            return "cancel"
+        else:
+            logger.info(f"User provided feedback for plan refinement: {user_input}")
+            return "refine"
 
     def display_help(self, help_text: str):
         """Displays a formatted help menu."""
