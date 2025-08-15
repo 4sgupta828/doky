@@ -69,6 +69,11 @@ class TestRunnerAgent(BaseAgent):
         """Run tests independently by discovering test files in the workspace."""
         workspace_path = Path(context.workspace_path)
         
+        # Ensure test environment is set up
+        env_setup_result = self._setup_test_environment(workspace_path)
+        if not env_setup_result["success"]:
+            return AgentResponse(success=False, message=env_setup_result["message"])
+        
         # Look for tests in the workspace
         test_files = self._discover_test_files(workspace_path)
         
@@ -85,14 +90,18 @@ class TestRunnerAgent(BaseAgent):
             # Fallback to running individual test files
             results = self._run_individual_tests(test_files)
         
-        # Create summary report
-        total_tests = len(test_files)
-        failed_tests = sum(1 for result in results if not result['success'])
+        # Create summary report with actual test counts
+        total_test_functions = sum(result.get('test_count', 1) for result in results)
+        total_passed = sum(result.get('passed_count', 1 if result['success'] else 0) for result in results)
+        total_failed = sum(result.get('failed_count', 0 if result['success'] else 1) for result in results)
+        failed_files = sum(1 for result in results if not result['success'])
         
         summary = {
-            "total": total_tests,
-            "passed": total_tests - failed_tests, 
-            "failed": failed_tests,
+            "total_test_files": len(test_files),
+            "total_test_functions": total_test_functions,
+            "passed": total_passed,
+            "failed": total_failed,
+            "failed_files": failed_files,
             "details": results
         }
         
@@ -100,12 +109,12 @@ class TestRunnerAgent(BaseAgent):
         report_json = json.dumps(summary, indent=2)
         context.add_artifact("test_execution_report.json", report_json, current_task.task_id)
         
-        if failed_tests > 0:
-            msg = f"Test suite failed. {failed_tests} out of {total_tests} test files failed."
+        if total_failed > 0 or failed_files > 0:
+            msg = f"Test suite failed. {total_failed} out of {total_test_functions} tests failed across {failed_files} files."
             logger.error(msg)
             return AgentResponse(success=False, message=msg, artifacts_generated=["test_execution_report.json"])
         else:
-            msg = f"Test suite passed. All {total_tests} test files were successful."
+            msg = f"Test suite passed. All {total_test_functions} tests passed across {len(test_files)} files."
             logger.info(msg)
             return AgentResponse(success=True, message=msg, artifacts_generated=["test_execution_report.json"])
     
@@ -139,31 +148,69 @@ class TestRunnerAgent(BaseAgent):
     def _run_with_pytest(self, workspace_path: Path, test_files: list) -> list:
         """Try to run tests using pytest with JSON output."""
         try:
+            # Use the virtual environment python if available
+            python_exe = getattr(self, '_venv_python', sys.executable)
+            
             # Check if pytest is available
-            result = subprocess.run([sys.executable, "-m", "pytest", "--version"], 
+            result = subprocess.run([python_exe, "-m", "pytest", "--version"], 
                                   capture_output=True, text=True, cwd=workspace_path)
             if result.returncode != 0:
                 logger.info("pytest not available, falling back to individual test execution")
                 return None
             
             # Run pytest with JSON report
-            cmd = [sys.executable, "-m", "pytest", "--tb=short", "-v"] + [str(f) for f in test_files]
+            cmd = [python_exe, "-m", "pytest", "--tb=short", "-v"] + [str(f) for f in test_files]
             result = subprocess.run(cmd, capture_output=True, text=True, cwd=workspace_path)
             
             # Parse pytest output to create our own summary
             results = []
-            for test_file in test_files:
-                # Simple heuristic: if pytest succeeded overall and no failures mentioned this file
-                file_success = result.returncode == 0 and str(test_file.name) not in result.stdout
-                if not file_success and result.returncode != 0:
-                    # Check if this specific file had issues
-                    file_success = str(test_file.name) not in result.stderr
-                
+            output_text = result.stdout + result.stderr
+            
+            # Parse overall results first
+            import re
+            test_count = 0
+            passed_count = 0
+            failed_count = 0
+            
+            # Look for test collection info like "collected 14 items"
+            collected_match = re.search(r'collected (\d+) items?', output_text)
+            if collected_match:
+                test_count = int(collected_match.group(1))
+            
+            # Look for final result line like "14 passed in 0.02s"
+            passed_match = re.search(r'(\d+) passed', output_text)
+            if passed_match:
+                passed_count = int(passed_match.group(1))
+            
+            failed_match = re.search(r'(\d+) failed', output_text)
+            if failed_match:
+                failed_count = int(failed_match.group(1))
+            
+            # When running multiple files together, we get aggregate results
+            # For simplicity, we'll create one entry per file and distribute the results
+            file_success = result.returncode == 0
+            
+            if len(test_files) == 1:
+                # Single file case - straightforward
                 results.append({
-                    'file': str(test_file),
+                    'file': str(test_files[0]),
                     'success': file_success,
-                    'output': result.stdout if file_success else result.stderr
+                    'output': output_text,
+                    'test_count': test_count,
+                    'passed_count': passed_count,
+                    'failed_count': failed_count
                 })
+            else:
+                # Multiple files - distribute counts evenly (approximation)
+                for test_file in test_files:
+                    results.append({
+                        'file': str(test_file),
+                        'success': file_success,
+                        'output': output_text,
+                        'test_count': test_count // len(test_files),
+                        'passed_count': passed_count // len(test_files),
+                        'failed_count': failed_count // len(test_files)
+                    })
             
             return results
             
@@ -172,33 +219,93 @@ class TestRunnerAgent(BaseAgent):
             return None
     
     def _run_individual_tests(self, test_files: list) -> list:
-        """Run test files individually."""
+        """Run test files individually using pytest."""
         results = []
+        
+        # Use the virtual environment python if available
+        python_exe = getattr(self, '_venv_python', sys.executable)
         
         for test_file in test_files:
             try:
                 logger.info(f"Running test file: {test_file}")
+                
+                # Try to run with pytest first
                 result = subprocess.run(
-                    [sys.executable, str(test_file)],
+                    [python_exe, "-m", "pytest", str(test_file), "-v", "--tb=short"],
                     capture_output=True,
                     text=True,
-                    timeout=60  # 60 second timeout per test file
+                    timeout=60,  # 60 second timeout per test file
+                    cwd=test_file.parent.parent  # Set working directory to project root
                 )
                 
+                # If pytest fails, try running as standalone script (fallback)
+                if result.returncode != 0 and "No module named pytest" in result.stderr:
+                    logger.info(f"Pytest not available for {test_file.name}, trying standalone execution")
+                    result = subprocess.run(
+                        [python_exe, str(test_file)],
+                        capture_output=True,
+                        text=True,
+                        timeout=60,
+                        cwd=test_file.parent.parent  # Set working directory to project root
+                    )
+                
                 success = result.returncode == 0
-                output = result.stdout if success else result.stderr
+                output = result.stdout + result.stderr  # Capture both stdout and stderr
+                
+                # Parse pytest output to get individual test counts
+                test_count = 1  # Default to 1 if parsing fails
+                passed_count = 0
+                failed_count = 0
+                
+                # Always try to parse output for pytest patterns
+                output_text = output
+                import re
+                
+                # Look for test collection info like "collected 14 items"
+                collected_match = re.search(r'collected (\d+) items?', output_text)
+                if collected_match:
+                    test_count = int(collected_match.group(1))
+                
+                # Look for final result line like "14 passed in 0.02s"
+                passed_match = re.search(r'(\d+) passed', output_text)
+                if passed_match:
+                    passed_count = int(passed_match.group(1))
+                
+                failed_match = re.search(r'(\d+) failed', output_text)
+                if failed_match:
+                    failed_count = int(failed_match.group(1))
+                
+                # If we successfully parsed pytest output, use those counts
+                if passed_count > 0 or failed_count > 0:
+                    if success and passed_count > 0:
+                        # Pytest succeeded
+                        pass
+                    elif not success and failed_count > 0:
+                        # Pytest failed
+                        pass
+                else:
+                    # Fallback: use success/failure of the file itself
+                    if success:
+                        passed_count = 1
+                        failed_count = 0
+                    else:
+                        passed_count = 0
+                        failed_count = 1
                 
                 results.append({
                     'file': str(test_file),
                     'success': success,
                     'output': output,
-                    'return_code': result.returncode
+                    'return_code': result.returncode,
+                    'test_count': test_count,
+                    'passed_count': passed_count,
+                    'failed_count': failed_count
                 })
                 
                 if success:
-                    logger.info(f"✅ {test_file.name} PASSED")
+                    logger.info(f"✅ {test_file.name} PASSED ({passed_count} tests)")
                 else:
-                    logger.error(f"❌ {test_file.name} FAILED (exit code {result.returncode})")
+                    logger.error(f"❌ {test_file.name} FAILED (exit code {result.returncode}, {failed_count} failed tests)")
                     
             except subprocess.TimeoutExpired:
                 logger.error(f"⏰ {test_file.name} TIMEOUT")
@@ -218,6 +325,55 @@ class TestRunnerAgent(BaseAgent):
                 })
         
         return results
+    
+    def _setup_test_environment(self, workspace_path: Path) -> dict:
+        """Set up the test environment by ensuring required dependencies are installed."""
+        try:
+            # Check if we're in a virtual environment
+            venv_path = workspace_path / "test_env"
+            requirements_path = workspace_path / "requirements.txt"
+            
+            # If no virtual environment exists, create one
+            if not venv_path.exists():
+                logger.info("Creating virtual environment for testing...")
+                result = subprocess.run([sys.executable, "-m", "venv", str(venv_path)], 
+                                      capture_output=True, text=True, cwd=workspace_path)
+                if result.returncode != 0:
+                    return {"success": False, "message": f"Failed to create virtual environment: {result.stderr}"}
+            
+            # Determine the python executable in the venv
+            if sys.platform == "win32":
+                venv_python = venv_path / "Scripts" / "python.exe"
+                pip_exe = venv_path / "Scripts" / "pip.exe"
+            else:
+                venv_python = venv_path / "bin" / "python"
+                pip_exe = venv_path / "bin" / "pip"
+            
+            # Install pytest if not available
+            result = subprocess.run([str(venv_python), "-c", "import pytest"], 
+                                  capture_output=True, text=True)
+            if result.returncode != 0:
+                logger.info("Installing pytest in virtual environment...")
+                result = subprocess.run([str(pip_exe), "install", "pytest"], 
+                                      capture_output=True, text=True)
+                if result.returncode != 0:
+                    return {"success": False, "message": f"Failed to install pytest: {result.stderr}"}
+            
+            # Install requirements if available
+            if requirements_path.exists():
+                logger.info("Installing requirements in virtual environment...")
+                result = subprocess.run([str(pip_exe), "install", "-r", str(requirements_path)], 
+                                      capture_output=True, text=True)
+                if result.returncode != 0:
+                    logger.warning(f"Failed to install some requirements: {result.stderr}")
+                    # Don't fail completely - some requirements might not be test-related
+            
+            # Store the python executable for later use
+            self._venv_python = str(venv_python)
+            return {"success": True, "message": "Test environment ready"}
+            
+        except Exception as e:
+            return {"success": False, "message": f"Error setting up test environment: {e}"}
 
 # --- Self-Testing Block ---
 if __name__ == "__main__":
