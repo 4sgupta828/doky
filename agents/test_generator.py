@@ -220,6 +220,21 @@ class TestGenerationAgent(BaseAgent):
                 content = context.workspace.get_file_content(file_path)
                 if content:
                     code_to_test[file_path] = content
+        
+        # If no code was found from manifest, try to discover existing Python files
+        if not code_to_test:
+            logger.info("No code found from manifest. Attempting to discover existing Python files.")
+            try:
+                all_files = context.workspace.list_files(".")
+                for file_path in all_files:
+                    if file_path.endswith(".py") and not file_path.startswith("tests/") and not file_path.startswith("test_"):
+                        content = context.workspace.get_file_content(file_path)
+                        if content:
+                            code_to_test[file_path] = content
+                            logger.info(f"Discovered code file for testing: {file_path}")
+            except Exception as e:
+                logger.warning(f"Failed to discover code files: {e}")
+        
         if not code_to_test:
             return AgentResponse(success=True, message="No application code found to test.")
 
