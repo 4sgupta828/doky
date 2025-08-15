@@ -1,6 +1,8 @@
 # core/context.py
 import json
 import logging
+import os
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -31,20 +33,39 @@ class GlobalContext:
     as the entire state of the mission can be inspected or even serialized at any point.
     """
 
-    def __init__(self, workspace_path: str = "./mission_workspace"):
+    def __init__(self, workspace_path: Optional[str] = None):
         """
         Initializes the GlobalContext.
 
         Args:
-            workspace_path: The file path for the coding workspace.
+            workspace_path: The file path for the coding workspace. If None, 
+                          auto-generates a timestamped directory in /Users/sgupta/
         """
         # Import here to avoid circular import
         from utils.git_manager import GitWorkspaceManager
+        
+        # Track if workspace was auto-generated
+        workspace_was_auto_generated = workspace_path is None
+        
+        # Auto-generate workspace path if not provided
+        if workspace_path is None:
+            from config import config
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            workspace_path = os.path.join(config.workspace_root_dir, f"ws_{timestamp}")
+            logger.info(f"Auto-generating workspace directory: {workspace_path}")
+        
+        self.workspace_path = workspace_path  # Store for user communication
+        self.workspace_was_auto_generated = workspace_was_auto_generated
         
         self.task_graph = TaskGraph()
         self.workspace: WorkspaceManager = GitWorkspaceManager(workspace_path)
         self.artifacts: Dict[str, Any] = {}
         self.mission_log: List[Dict[str, Any]] = []
+        
+        # Initialize session data directory
+        from config import config
+        self.session_dir = config.get_workspace_session_dir(workspace_path)
+        
         self.log_event(
             "context_initialized",
             {"workspace_path": workspace_path, "message": "GlobalContext is ready."}
@@ -96,15 +117,19 @@ class GlobalContext:
         self.mission_log.append(log_entry)
         logger.debug(f"Logged event: {log_entry}")
 
-    def save_snapshot(self, file_path: str):
+    def save_snapshot(self, file_path: Optional[str] = None):
         """
         Saves the current state of the GlobalContext to a JSON file.
         This is an invaluable debugging tool, allowing developers to capture the exact
         state of a mission at the moment of failure for later analysis.
 
         Args:
-            file_path: The path to save the snapshot file.
+            file_path: The path to save the snapshot file. If None, saves to session directory.
         """
+        if file_path is None:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            file_path = str(self.session_dir / f"snapshot_{timestamp}.json")
+        
         logger.info(f"Saving debug snapshot to: {file_path}")
         snapshot_path = Path(file_path)
         snapshot_path.parent.mkdir(parents=True, exist_ok=True)
@@ -114,7 +139,10 @@ class GlobalContext:
                 # Pydantic's model_dump is used for safe serialization to JSON-compatible types.
                 "task_graph": self.task_graph.model_dump(mode='json'),
                 "artifacts": {k: str(v)[:500] + '...' if isinstance(v, str) else type(v).__name__ for k, v in self.artifacts.items()},
-                "mission_log": self.mission_log
+                "mission_log": self.mission_log,
+                "workspace_path": self.workspace_path,
+                "session_dir": str(self.session_dir),
+                "timestamp": datetime.now().isoformat()
             }
             with open(snapshot_path, 'w', encoding='utf-8') as f:
                 json.dump(state_data, f, indent=2)
@@ -123,6 +151,56 @@ class GlobalContext:
             logger.error(f"Failed to serialize context to JSON. Check for non-serializable artifacts. Error: {e}", exc_info=True)
         except Exception as e:
             logger.error(f"An unexpected error occurred while saving snapshot: {e}", exc_info=True)
+    
+    def save_session_memory(self, memory_data: Dict[str, Any]):
+        """
+        Saves session-specific memory/data to the session directory.
+        
+        Args:
+            memory_data: Dictionary of memory data to save
+        """
+        memory_file = self.session_dir / "session_memory.json"
+        
+        try:
+            # Load existing memory if it exists
+            existing_memory = {}
+            if memory_file.exists():
+                with open(memory_file, 'r', encoding='utf-8') as f:
+                    existing_memory = json.load(f)
+            
+            # Merge with new memory data
+            existing_memory.update(memory_data)
+            existing_memory["last_updated"] = datetime.now().isoformat()
+            
+            # Save updated memory
+            with open(memory_file, 'w', encoding='utf-8') as f:
+                json.dump(existing_memory, f, indent=2)
+                
+            logger.info(f"Session memory saved to: {memory_file}")
+            
+        except Exception as e:
+            logger.error(f"Failed to save session memory: {e}", exc_info=True)
+    
+    def load_session_memory(self) -> Dict[str, Any]:
+        """
+        Loads session-specific memory/data from the session directory.
+        
+        Returns:
+            Dictionary of loaded memory data, empty dict if none exists
+        """
+        memory_file = self.session_dir / "session_memory.json"
+        
+        if not memory_file.exists():
+            return {}
+        
+        try:
+            with open(memory_file, 'r', encoding='utf-8') as f:
+                memory_data = json.load(f)
+            logger.info(f"Session memory loaded from: {memory_file}")
+            return memory_data
+        except Exception as e:
+            logger.error(f"Failed to load session memory: {e}", exc_info=True)
+            return {}
 
 
 # --- Self-Testing Block ---

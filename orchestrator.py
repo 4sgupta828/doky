@@ -20,13 +20,14 @@ class Orchestrator:
     with the AdaptiveEngine when failures occur. It acts purely as a conductor.
     """
 
-    def __init__(self, workspace_path: str = "./mission_workspace", ui_interface: Any = None):
+    def __init__(self, workspace_path: Optional[str] = None, ui_interface: Any = None):
         """
         Initializes the Orchestrator and all core components of the agent collective.
         This setup phase is critical for establishing the mission's environment.
         
         Args:
-            workspace_path: The directory path for the mission's workspace.
+            workspace_path: The directory path for the mission's workspace. If None,
+                          auto-generates a timestamped directory in /Users/sgupta/
             ui_interface: The UI interface for user interaction (optional).
         """
         self.ui_interface = ui_interface

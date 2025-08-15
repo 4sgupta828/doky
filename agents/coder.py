@@ -37,24 +37,31 @@ class CodeGenerationAgent(BaseAgent):
     def _build_prompt(self, files_to_generate: List[str], spec: str, existing_code: Dict[str, str]) -> str:
         """
         Constructs a detailed prompt to guide the LLM in generating code for a
-        specific set of files.
+        specific set of files, or to determine appropriate files if none specified.
         """
         existing_code_str = "\n".join(
             f"--- File: {path} ---\n```python\n{content}\n```"
             for path, content in existing_code.items()
         )
         
+        if files_to_generate:
+            files_section = f"""
+        **Files to Generate/Modify:**
+        - {"\n- ".join(files_to_generate)}"""
+        else:
+            files_section = """
+        **Files to Generate/Modify:**
+        No specific files specified. Please determine the appropriate file(s) to create based on the specification."""
+
         return f"""
         You are an expert software developer. Your task is to write production-quality Python code
-        for the following files based on the provided technical specification.
+        based on the provided technical specification.
 
         **Technical Specification:**
         ---
         {spec}
         ---
-
-        **Files to Generate/Modify:**
-        - {"\n- ".join(files_to_generate)}
+        {files_section}
 
         **Existing Code for Context (if any):**
         ---
@@ -65,106 +72,212 @@ class CodeGenerationAgent(BaseAgent):
         1.  Adhere strictly to the technical specification.
         2.  Write clean, efficient, and well-commented code.
         3.  Ensure all necessary imports are included in each file.
-        4.  Your output MUST be a single, valid JSON object. This object should be a dictionary
-            where keys are the file paths (e.g., "src/main.py") and values are the complete
-            code content for that file as a single string.
+        4.  Choose appropriate filenames if none were specified (e.g., "main.py", "utils.py", etc.).
+        5.  You MUST generate at least one file with actual code content.
+        6.  Your output MUST be a single, valid JSON object. This object should be a dictionary
+            where keys are the file paths and values are the complete code content for that file as a string.
+        7.  Do NOT return an empty dictionary {{}} - always generate at least one file.
 
         **JSON Output Format Example:**
         {{
-            "src/models/user.py": "from sqlalchemy import Column, String\\n\\nclass User(...):\\n    ...",
-            "src/routes/auth.py": "from flask import Blueprint\\n\\nauth_bp = Blueprint(...)"
+            "main.py": "def add_numbers(a, b):\\n    return a + b\\n\\nif __name__ == '__main__':\\n    print(add_numbers(2, 3))",
+            "utils.py": "def helper_function():\\n    pass"
         }}
 
-        Now, generate the code for the requested files.
+        **IMPORTANT:** You must generate actual code files. An empty response {{}} is not acceptable.
+        
+        Now, generate the appropriate code files based on the specification.
         """
 
     def execute(self, goal: str, context: GlobalContext, current_task: TaskNode) -> AgentResponse:
-        logger.info(f"CodeGenerationAgent executing with goal: '{goal}'")
-
-        # 1. Retrieve necessary artifacts from the context.
-        spec_key = "technical_spec.md"
-        manifest_key = "file_manifest.json"
+        # Temporarily enable DEBUG logging for this agent
+        original_level = logger.level
+        logger.setLevel(logging.DEBUG)
         
-        tech_spec = context.get_artifact(spec_key)
-        manifest = context.get_artifact(manifest_key)
-
-        if not tech_spec or not manifest:
-            msg = f"Missing required artifacts: needs '{spec_key}' and '{manifest_key}'."
-            logger.error(msg)
-            return AgentResponse(success=False, message=msg)
+        # Also enable DEBUG for the real_llm_client logger
+        llm_logger = logging.getLogger('real_llm_client')
+        original_llm_level = llm_logger.level
+        llm_logger.setLevel(logging.DEBUG)
         
-        files_to_generate = manifest.get("files_to_create", [])
-        if not files_to_generate:
-            return AgentResponse(success=True, message="Code manifest is empty. No files to generate.")
-
-        # 2. Build context of existing code (if any files already exist).
-        existing_code = {}
-        for file_path in files_to_generate:
-            content = context.workspace.get_file_content(file_path)
-            if content:
-                existing_code[file_path] = content
-
-        # 3. Construct the prompt and invoke the LLM.
-        # Define JSON schema for guaranteed structured response
-        code_generation_schema = {
-            "type": "object",
-            "properties": {},
-            "additionalProperties": {"type": "string"},
-            "description": "Dictionary mapping file paths to their code content"
-        }
-
+        # Also try the module name logger
+        module_logger = logging.getLogger(__name__.replace('agents.coder', 'real_llm_client'))
+        original_module_level = module_logger.level
+        module_logger.setLevel(logging.DEBUG)
+        
         try:
-            prompt = self._build_prompt(files_to_generate, tech_spec, existing_code)
+            logger.info(f"CodeGenerationAgent executing with goal: '{goal}'")
+
+            # 1. Retrieve necessary artifacts from the context.
+            spec_key = "technical_spec.md"
+            manifest_key = "file_manifest.json"
             
-            # Use function calling for guaranteed JSON response
-            if hasattr(self.llm_client, 'invoke_with_schema'):
-                llm_response_str = self.llm_client.invoke_with_schema(prompt, code_generation_schema)
+            tech_spec = context.get_artifact(spec_key)
+            manifest = context.get_artifact(manifest_key)
+
+            # Handle missing inputs gracefully - work with what we have
+            if not tech_spec and not manifest:
+                # No artifacts available - work directly from the goal
+                tech_spec = f"User Request: {goal}"
+                files_to_generate = []
+                logger.info("No spec or manifest found. Working directly from goal.")
+                context.log_event("coder_fallback", {"reason": "no_artifacts", "working_from": "goal_only"})
+            elif not tech_spec:
+                # Have manifest but no spec - use goal as spec
+                tech_spec = f"User Request: {goal}"
+                files_to_generate = manifest.get("files_to_create", [])
+                logger.info("No spec found. Using goal as specification.")
+            elif not manifest:
+                # Have spec but no manifest - infer files from spec and goal
+                tech_spec = tech_spec
+                files_to_generate = []
+                logger.info("No manifest found. Will infer files to create from spec.")
             else:
-                # Fallback to regular invoke for backward compatibility
-                llm_response_str = self.llm_client.invoke(prompt)
+                # Have both artifacts
+                files_to_generate = manifest.get("files_to_create", [])
             
-            generated_code_map = json.loads(llm_response_str)
+            # If no files specified, let the LLM decide what files to create based on the goal/spec
+            if not files_to_generate:
+                logger.info("No specific files to generate. LLM will determine appropriate files to create.")
+                logger.debug(f"Working with goal: '{goal}' and spec: '{tech_spec[:100]}...'")  # Truncate for logging
 
-            if not isinstance(generated_code_map, dict):
-                raise ValueError("LLM response is not a valid dictionary of file paths to code.")
+            # 2. Build context of existing code (if any files already exist).
+            existing_code = {}
+            for file_path in files_to_generate:
+                content = context.workspace.get_file_content(file_path)
+                if content:
+                    existing_code[file_path] = content
 
-        except NotImplementedError as e:
-            msg = f"Cannot execute code generation: {e}"
-            logger.critical(msg)
-            return AgentResponse(success=False, message=msg)
-        except (json.JSONDecodeError, ValueError) as e:
-            msg = f"Failed to parse LLM response as valid JSON code map. Error: {e}"
-            logger.error(msg)
-            return AgentResponse(success=False, message=msg)
-        except Exception as e:
-            error_msg = f"An unexpected error occurred while calling the LLM for code generation: {e}"
-            logger.critical(error_msg, exc_info=True)
-            return AgentResponse(success=False, message=error_msg)
+            # 3. Construct the prompt and invoke the LLM.
+            # Define JSON schema for guaranteed structured response
+            code_generation_schema = {
+                "type": "object",
+                "properties": {
+                    "files": {
+                        "type": "object",
+                        "additionalProperties": {"type": "string"},
+                        "description": "Dictionary mapping file paths to their code content",
+                        "minProperties": 1
+                    }
+                },
+                "required": ["files"],
+                "description": "Object containing generated code files"
+            }
 
-        # 4. Write the generated code to the workspace.
-        written_files = []
-        for file_path, code_content in generated_code_map.items():
-            if not isinstance(code_content, str):
-                logger.warning(f"Skipping file '{file_path}' due to invalid code content type.")
-                continue
-            
             try:
-                context.workspace.write_file_content(file_path, code_content, current_task.task_id)
-                written_files.append(file_path)
-            except Exception as e:
-                msg = f"Failed to write file '{file_path}' to workspace. Error: {e}"
-                logger.error(msg, exc_info=True)
-                # Return failure on the first write error.
+                prompt = self._build_prompt(files_to_generate, tech_spec, existing_code)
+                logger.debug(f"Built prompt with {len(prompt)} characters")
+                
+                # Use regular invoke by default, fall back to function calling if needed
+                logger.debug("Using regular invoke method (primary approach)")
+                llm_response_str = self.llm_client.invoke(prompt)
+                
+                # Check if the response is valid JSON with actual content
+                try:
+                    test_parse = json.loads(llm_response_str)
+                    if not isinstance(test_parse, dict) or not test_parse:
+                        raise ValueError("Invalid or empty response")
+                    logger.debug("Regular invoke succeeded with valid JSON response")
+                except (json.JSONDecodeError, ValueError) as e:
+                    logger.warning(f"Regular invoke failed to produce valid JSON ({e}), trying function calling")
+                    if hasattr(self.llm_client, 'invoke_with_schema'):
+                        try:
+                            llm_response_str = self.llm_client.invoke_with_schema(prompt, code_generation_schema)
+                            logger.debug("Function calling fallback succeeded")
+                        except Exception as fallback_error:
+                            logger.error(f"Function calling fallback also failed: {fallback_error}")
+                            # Keep the original response from regular invoke for error reporting
+                            pass
+                    else:
+                        logger.warning("Function calling not available, keeping original response")
+                
+                logger.debug(f"LLM response length: {len(llm_response_str)} characters")
+                logger.debug(f"LLM response preview: {llm_response_str[:200]}...")
+                logger.debug(f"Full LLM response: {llm_response_str}")
+                
+                response_data = json.loads(llm_response_str)
+                logger.debug(f"Parsed JSON type: {type(response_data)}")
+                logger.debug(f"Parsed JSON keys: {list(response_data.keys()) if isinstance(response_data, dict) else 'Not a dict'}")
+
+                if not isinstance(response_data, dict):
+                    raise ValueError("LLM response is not a valid dictionary.")
+                
+                # Extract the files from the structured response
+                if "files" in response_data:
+                    generated_code_map = response_data["files"]
+                else:
+                    # Fallback: treat the whole response as the file map (backward compatibility)
+                    generated_code_map = response_data
+                
+                logger.debug(f"Generated code map keys: {list(generated_code_map.keys()) if isinstance(generated_code_map, dict) else 'Not a dict'}")
+                logger.debug(f"Generated code map length: {len(generated_code_map) if isinstance(generated_code_map, dict) else 'N/A'}")
+                
+                if not isinstance(generated_code_map, dict):
+                    raise ValueError("Files section is not a valid dictionary of file paths to code.")
+                
+                if not generated_code_map:
+                    raise ValueError("LLM returned empty code dictionary.")
+                
+                logger.info(f"LLM generated code for {len(generated_code_map)} files: {list(generated_code_map.keys())}")
+
+            except NotImplementedError as e:
+                msg = f"Cannot execute code generation: {e}"
+                logger.critical(msg)
                 return AgentResponse(success=False, message=msg)
+            except (json.JSONDecodeError, ValueError) as e:
+                msg = f"Failed to parse LLM response as valid JSON code map. Error: {e}"
+                logger.error(msg)
+                logger.error(f"Raw LLM response causing the error: '{llm_response_str}'")
+                logger.error(f"Prompt sent to LLM (first 500 chars): {prompt[:500]}...")
+                return AgentResponse(success=False, message=msg)
+            except Exception as e:
+                error_msg = f"An unexpected error occurred while calling the LLM for code generation: {e}"
+                logger.critical(error_msg, exc_info=True)
+                return AgentResponse(success=False, message=error_msg)
 
-        if not written_files:
-            return AgentResponse(success=False, message="LLM generated a response, but no valid files were written.")
+            # 4. Write the generated code to the workspace.
+            written_files = []
+            skipped_files = []
+            
+            for file_path, code_content in generated_code_map.items():
+                if not isinstance(code_content, str):
+                    logger.warning(f"Skipping file '{file_path}' due to invalid code content type: {type(code_content)}")
+                    skipped_files.append(file_path)
+                    continue
+                
+                if not code_content.strip():
+                    logger.warning(f"Skipping file '{file_path}' due to empty code content")
+                    skipped_files.append(file_path)
+                    continue
+                
+                try:
+                    logger.debug(f"Writing file '{file_path}' with {len(code_content)} characters")
+                    context.workspace.write_file_content(file_path, code_content, current_task.task_id)
+                    written_files.append(file_path)
+                    logger.info(f"Successfully wrote file '{file_path}'")
+                except Exception as e:
+                    msg = f"Failed to write file '{file_path}' to workspace. Error: {e}"
+                    logger.error(msg, exc_info=True)
+                    # Return failure on the first write error.
+                    return AgentResponse(success=False, message=msg)
 
-        return AgentResponse(
-            success=True,
-            message=f"Successfully generated and wrote {len(written_files)} files to the workspace.",
-            artifacts_generated=written_files
-        )
+            if not written_files:
+                error_details = f"LLM generated {len(generated_code_map)} file(s) but none were valid for writing."
+                if skipped_files:
+                    error_details += f" Skipped files: {skipped_files}"
+                logger.error(error_details)
+                return AgentResponse(success=False, message=error_details)
+
+            return AgentResponse(
+                success=True,
+                message=f"Successfully generated and wrote {len(written_files)} files to the workspace.",
+                artifacts_generated=written_files
+            )
+        
+        finally:
+            # Restore original logging levels
+            logger.setLevel(original_level)
+            llm_logger.setLevel(original_llm_level)
+            module_logger.setLevel(original_module_level)
 
 
 # --- Self-Testing Block ---

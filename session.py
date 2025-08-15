@@ -18,12 +18,13 @@ class InteractiveSession:
     entire Read-Plan-Execute-Loop (RPEL) with a refinement stage.
     """
 
-    def __init__(self, workspace_path: str = "./mission_workspace"):
+    def __init__(self, workspace_path: Optional[str] = None):
         """
         Initializes the interactive session.
 
         Args:
-            workspace_path: The file path for the mission's workspace.
+            workspace_path: The file path for the mission's workspace. If None,
+                          auto-generates a timestamped directory in /Users/sgupta/
         """
         try:
             self.ui = CollaborationUI()
@@ -40,12 +41,26 @@ class InteractiveSession:
         that runs the interactive session.
         """
         self.ui.display_system_message(f"{Style.BOLD}Sovereign Agent Collective: Interactive Session Activated{Style.RESET}")
+        
+        # Communicate workspace information to user
+        workspace_path = self.global_context.workspace_path
+        if self.global_context.workspace_was_auto_generated:
+            self.ui.display_system_message(f"📁 Created new workspace: {Style.BOLD}{workspace_path}{Style.RESET}")
+        else:
+            self.ui.display_system_message(f"📁 Using workspace: {Style.BOLD}{workspace_path}{Style.RESET}")
+        
+        # Show session data directory
+        session_dir = self.global_context.session_dir
+        self.ui.display_system_message(f"💾 Session data: {session_dir}")
+        
         print("Type your goal and press Enter. Type 'exit' or 'quit' to end.")
 
         while True:
             try:
                 user_input = self.ui.prompt_for_input("Your command")
                 if user_input.lower() in ["exit", "quit"]:
+                    # Save session data before exiting
+                    self._save_session_data()
                     self.ui.display_system_message("Session terminated. Goodbye!")
                     break
 
@@ -61,6 +76,8 @@ class InteractiveSession:
                 self.ui.display_status(self.global_context, "Ready for your next command.")
 
             except KeyboardInterrupt:
+                # Save session data before exiting
+                self._save_session_data()
                 self.ui.display_system_message("\nSession interrupted by user. Goodbye!")
                 break
             except Exception as e:
@@ -73,15 +90,19 @@ class InteractiveSession:
         refinement loop for the user to perfect the plan.
         """
         current_goal = goal
+        plan_generated = False
         
         while True: # This is the Plan-Refine-Confirm loop
-            # --- PLAN STAGE ---
-            self.ui.display_system_message(f"Analyzing goal and generating a plan for: '{current_goal}'")
-            plan_response: AgentResponse = self.orchestrator.plan_mission(current_goal)
+            # --- PLAN STAGE (only on first iteration or after plan failure) ---
+            if not plan_generated:
+                self.ui.display_system_message(f"Analyzing goal and generating a plan for: '{current_goal}'")
+                plan_response: AgentResponse = self.orchestrator.plan_mission(current_goal)
 
-            if not plan_response.success:
-                self.ui.display_system_message(f"Failed to create a plan: {plan_response.message}", is_error=True)
-                return # Exit the handler and wait for a new goal
+                if not plan_response.success:
+                    self.ui.display_system_message(f"Failed to create a plan: {plan_response.message}", is_error=True)
+                    return # Exit the handler and wait for a new goal
+                    
+                plan_generated = True
 
             # --- CONFIRM STAGE ---
             user_choice = self.ui.present_plan_for_approval(self.global_context.task_graph)
@@ -144,6 +165,31 @@ class InteractiveSession:
         self.ui.display_system_message(f"Directly invoking {agent_name}...")
         response = self.orchestrator.execute_single_task(goal, agent_name)
         self.ui.display_direct_command_result(agent_name, response)
+    
+    def _save_session_data(self):
+        """Save session data and create a final snapshot before exit."""
+        try:
+            # Save final snapshot
+            self.global_context.save_snapshot()
+            
+            # Save session summary
+            task_count = len(self.global_context.task_graph.nodes)
+            artifact_count = len(self.global_context.artifacts)
+            
+            session_summary = {
+                "session_ended": True,
+                "task_count": task_count,
+                "artifact_count": artifact_count,
+                "total_events": len(self.global_context.mission_log),
+                "workspace_path": self.global_context.workspace_path,
+                "workspace_was_auto_generated": self.global_context.workspace_was_auto_generated
+            }
+            
+            self.global_context.save_session_memory(session_summary)
+            logger.info("Session data saved successfully.")
+            
+        except Exception as e:
+            logger.error(f"Failed to save session data: {e}", exc_info=True)
 
 
 # --- Self-Testing Block ---
@@ -168,6 +214,7 @@ if __name__ == "__main__":
             self.mock_orchestrator = MockOrchestrator.return_value
             self.mock_ui = MockCollaborationUI.return_value
             
+            from core.context import GlobalContext
             self.mock_orchestrator.global_context = MagicMock(spec=GlobalContext)
             self.mock_orchestrator.global_context.task_graph = TaskGraph()
 

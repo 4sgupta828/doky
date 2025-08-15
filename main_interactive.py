@@ -37,8 +37,8 @@ def main(args: List[str]) -> None:
     parser.add_argument(
         "--workspace",
         type=str,
-        default="./mission_workspace",
-        help="The directory path for the mission's workspace."
+        default=None,
+        help="The directory path for the mission's workspace. If not specified, auto-generates a timestamped directory."
     )
 
     # We check for a special '--test' flag to run the built-in test suite.
@@ -85,7 +85,7 @@ if __name__ == "__main__":
                 mock_session_instance = MockInteractiveSession.return_value
                 main([]) # Simulate running with no command-line arguments
 
-                MockInteractiveSession.assert_called_once_with(workspace_path="./mission_workspace")
+                MockInteractiveSession.assert_called_once_with(workspace_path=None)
                 mock_session_instance.start.assert_called_once()
                 logger.info("✅ test_main_starts_session_with_default_workspace: PASSED")
 

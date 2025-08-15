@@ -39,8 +39,8 @@ def main(args: List[str]) -> None:
     parser.add_argument(
         "--workspace",
         type=str,
-        default="./mission_workspace",
-        help="The directory path for the mission's workspace."
+        default=None,
+        help="The directory path for the mission's workspace. If not specified, auto-generates a timestamped directory."
     )
 
     # In a real application, you might add a verbosity flag
@@ -115,7 +115,7 @@ if __name__ == "__main__":
                 main(test_args)
 
                 # Assert that the Orchestrator was initialized with the default workspace
-                MockOrchestrator.assert_called_once_with(workspace_path="./mission_workspace")
+                MockOrchestrator.assert_called_once_with(workspace_path=None)
                 
                 # Assert that execute_mission was called with the correct goal
                 mock_instance.execute_mission.assert_called_once_with("Build a simple Flask API")

@@ -6,6 +6,8 @@ This implements actual LLM integration instead of placeholder code.
 import os
 import json
 import logging
+import time
+import inspect
 from typing import Optional
 
 logger = logging.getLogger(__name__)
@@ -72,9 +74,10 @@ class RealLLMClient:
     def _estimate_token_count(self, text: str) -> int:
         """
         Estimate token count for a given text.
-        Uses a rough approximation of 4 characters per token.
+        Uses configurable characters per token ratio.
         """
-        return len(text) // 4
+        from config import config
+        return len(text) // config.llm_token_estimation_ratio
     
     def _validate_context_size(self, prompt: str) -> None:
         """
@@ -128,7 +131,26 @@ Large sections contributing to context:
             
             raise ContextTooLargeError(error_details)
     
-    def invoke(self, prompt: str, max_tokens: int = 1000, temperature: float = 0.1) -> str:
+    def _get_caller_info(self) -> str:
+        """Get information about the caller (agent) making the LLM request."""
+        frame = inspect.currentframe()
+        try:
+            # Go up the call stack to find the calling agent
+            while frame:
+                frame = frame.f_back
+                if frame and frame.f_code.co_filename.endswith('.py'):
+                    filename = frame.f_code.co_filename.split('/')[-1]
+                    if 'agent' in filename.lower() or filename in ['orchestrator.py', 'planner.py']:
+                        class_name = frame.f_locals.get('self', {})..__class__.__name__ if 'self' in frame.f_locals else 'Unknown'
+                        function_name = frame.f_code.co_name
+                        return f"{class_name}.{function_name} ({filename})"
+            return "Unknown caller"
+        except:
+            return "Unknown caller"
+        finally:
+            del frame
+
+    def invoke(self, prompt: str, max_tokens: int = None, temperature: float = None) -> str:
         """
         Invoke the LLM with a prompt and return the response.
         
@@ -143,17 +165,39 @@ Large sections contributing to context:
         Raises:
             ContextTooLargeError: If prompt exceeds context limits
         """
+        # Use config defaults if not provided
+        from config import config
+        if max_tokens is None:
+            max_tokens = config.llm_max_response_tokens
+        if temperature is None:
+            temperature = config.llm_default_temperature
+            
         # Validate context size before making the call
         self._validate_context_size(prompt)
         
+        # Get caller information and start timing
+        caller_info = self._get_caller_info()
+        start_time = time.time()
+        
+        logger.info(f"LLM request started - Caller: {caller_info}, Model: {self.model}, Tokens: {max_tokens}")
+        
         try:
             if self.provider == "openai":
-                response = self._client.chat.completions.create(
-                    model=self.model,
-                    messages=[{"role": "user", "content": prompt}],
-                    max_tokens=max_tokens,
-                    temperature=temperature
-                )
+                # Use max_completion_tokens for newer models like GPT-5
+                if "gpt-5" in self.model.lower():
+                    # GPT-5 only supports default temperature (1) and max_completion_tokens
+                    response = self._client.chat.completions.create(
+                        model=self.model,
+                        messages=[{"role": "user", "content": prompt}],
+                        max_completion_tokens=max_tokens
+                    )
+                else:
+                    response = self._client.chat.completions.create(
+                        model=self.model,
+                        messages=[{"role": "user", "content": prompt}],
+                        max_tokens=max_tokens,
+                        temperature=temperature
+                    )
                 return response.choices[0].message.content.strip()
                 
             elif self.provider == "anthropic":
@@ -166,10 +210,14 @@ Large sections contributing to context:
                 return response.content[0].text.strip()
                 
         except Exception as e:
-            logger.error(f"LLM invocation failed: {e}")
+            duration = time.time() - start_time
+            logger.error(f"LLM request failed - Caller: {caller_info}, Duration: {duration:.2f}s, Error: {e}")
             raise
+        finally:
+            duration = time.time() - start_time
+            logger.info(f"LLM request completed - Caller: {caller_info}, Duration: {duration:.2f}s")
 
-    def invoke_with_schema(self, prompt: str, schema: dict, max_tokens: int = 1000, temperature: float = 0.1) -> str:
+    def invoke_with_schema(self, prompt: str, schema: dict, max_tokens: int = None, temperature: float = None) -> str:
         """
         Invoke the LLM with function calling to guarantee JSON response matching schema.
         
@@ -185,29 +233,107 @@ Large sections contributing to context:
         Raises:
             ContextTooLargeError: If prompt exceeds context limits
         """
+        # Use config defaults if not provided
+        from config import config
+        if max_tokens is None:
+            max_tokens = config.llm_schema_max_response_tokens
+        if temperature is None:
+            temperature = config.llm_default_temperature
+            
+        logger.debug(f"invoke_with_schema called with max_tokens={max_tokens}, temperature={temperature}")
+            
         # Validate context size before making the call
         self._validate_context_size(prompt)
         
+        # Get caller information and start timing
+        caller_info = self._get_caller_info()
+        start_time = time.time()
+        
+        logger.info(f"LLM schema request started - Caller: {caller_info}, Model: {self.model}, Tokens: {max_tokens}")
+        
         try:
             if self.provider == "openai":
-                # OpenAI function calling
-                function_def = {
-                    "name": "respond",
-                    "description": "Respond with the requested structured data",
-                    "parameters": schema
-                }
-                
-                response = self._client.chat.completions.create(
-                    model=self.model,
-                    messages=[{"role": "user", "content": prompt}],
-                    functions=[function_def],
-                    function_call={"name": "respond"},
-                    max_tokens=max_tokens,
-                    temperature=temperature
-                )
-                
-                function_call = response.choices[0].message.function_call
-                return function_call.arguments
+                # Use tools API for GPT-5, legacy functions API for older models
+                if "gpt-5" in self.model.lower():
+                    # GPT-5 uses tools API
+                    tool_def = {
+                        "type": "function",
+                        "function": {
+                            "name": "respond",
+                            "description": "Respond with the requested structured data",
+                            "parameters": schema
+                        }
+                    }
+                    
+                    response = self._client.chat.completions.create(
+                        model=self.model,
+                        messages=[{"role": "user", "content": prompt}],
+                        tools=[tool_def],
+                        tool_choice={"type": "function", "function": {"name": "respond"}},
+                        max_completion_tokens=max_tokens
+                    )
+                    
+                    # Debug logging
+                    logger.debug(f"OpenAI response finish reason: {response.choices[0].finish_reason}")
+                    logger.debug(f"Message content: {response.choices[0].message.content}")
+                    logger.debug(f"Tool calls present: {bool(response.choices[0].message.tool_calls)}")
+                    if response.choices[0].message.tool_calls:
+                        logger.debug(f"First tool call arguments: {response.choices[0].message.tool_calls[0].function.arguments}")
+                        logger.debug(f"Tool call function name: {response.choices[0].message.tool_calls[0].function.name}")
+                    logger.debug(f"Prompt token count: {response.usage.prompt_tokens if response.usage else 'unknown'}")
+                    logger.debug(f"Completion token count: {response.usage.completion_tokens if response.usage else 'unknown'}")
+                    logger.debug(f"Model used: {self.model}")
+                    logger.debug(f"Max completion tokens requested: {max_tokens}")
+                    
+                    # Extract tool call from response
+                    tool_calls = response.choices[0].message.tool_calls
+                    if not tool_calls:
+                        logger.error(f"No tool calls in response. Full message: {response.choices[0].message}")
+                        logger.error(f"Finish reason: {response.choices[0].finish_reason}")
+                        
+                        # Check if it's a content policy or other issue
+                        if response.choices[0].finish_reason == "content_filter":
+                            raise ValueError("Request was filtered by content policy")
+                        elif response.choices[0].finish_reason == "length":
+                            raise ValueError("Response was cut off due to length limits")
+                        elif response.choices[0].message.content:
+                            # Model returned content instead of tool call - try to extract JSON
+                            content = response.choices[0].message.content.strip()
+                            logger.warning(f"Model returned content instead of tool call, attempting to extract JSON: {content[:200]}...")
+                            
+                            # Try to find JSON in the content
+                            import re
+                            json_match = re.search(r'\{.*\}', content, re.DOTALL)
+                            if json_match:
+                                logger.info("Found JSON in content, using it as response")
+                                return json_match.group(0)
+                            else:
+                                raise ValueError(f"Model returned content instead of tool call and no JSON found: {content[:200]}...")
+                        else:
+                            raise ValueError("No tool calls returned by OpenAI model")
+                    return tool_calls[0].function.arguments
+                    
+                else:
+                    # Legacy function calling for older models
+                    function_def = {
+                        "name": "respond",
+                        "description": "Respond with the requested structured data",
+                        "parameters": schema
+                    }
+                    
+                    response = self._client.chat.completions.create(
+                        model=self.model,
+                        messages=[{"role": "user", "content": prompt}],
+                        functions=[function_def],
+                        function_call={"name": "respond"},
+                        max_tokens=max_tokens,
+                        temperature=temperature
+                    )
+                    
+                    function_call = response.choices[0].message.function_call
+                    if function_call is None:
+                        raise ValueError("No function call returned by OpenAI model")
+                    return function_call.arguments
                 
             elif self.provider == "anthropic":
                 # Anthropic tool calling
@@ -235,14 +361,23 @@ Large sections contributing to context:
                 raise ValueError("No tool use found in Anthropic response")
                 
         except Exception as e:
-            logger.error(f"LLM schema invocation failed: {e}")
+            duration = time.time() - start_time
+            logger.error(f"LLM schema request failed - Caller: {caller_info}, Duration: {duration:.2f}s, Error: {e}")
             raise
+        finally:
+            duration = time.time() - start_time
+            logger.info(f"LLM schema request completed - Caller: {caller_info}, Duration: {duration:.2f}s")
 
 # Convenience function to create a client
-def create_llm_client(provider: str = None, model: str = None, max_context_tokens: int = 50000) -> RealLLMClient:
+def create_llm_client(provider: str = None, model: str = None, max_context_tokens: int = None) -> RealLLMClient:
     """
     Create an LLM client, trying different providers based on available API keys.
     """
+    # Use config for max_context_tokens if not provided
+    if max_context_tokens is None:
+        from config import config
+        max_context_tokens = config.max_context_tokens
+    
     if provider:
         return RealLLMClient(provider=provider, model=model, max_context_tokens=max_context_tokens)
     

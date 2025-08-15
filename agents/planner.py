@@ -85,13 +85,14 @@ class PlannerAgent(BaseAgent):
 
         **Instructions:**
         1.  Analyze the user goal and the available agents.
-        2.  Break the goal down into a series of logical, sequential steps.
-        3.  For each step, create a 'TaskNode'. Assign a unique `task_id`.
-        4.  Assign the most appropriate agent from the list of available agents to each task.
-        5.  Define the `dependencies` for each task using the `task_id` of prerequisite tasks.
-        6.  Define the `input_artifact_keys` and `output_artifact_keys` for data flow between tasks.
-        7.  The final output MUST be a single JSON object representing the TaskGraph, containing a 'nodes' dictionary.
-        8.  Ensure the keys in the 'nodes' dictionary are the same as the 'task_id' within each node object.
+        2.  Keep plans as SIMPLE as possible. For straightforward requests like "write a program", create 1-2 tasks maximum.
+        3.  Break the goal down into essential steps only. Avoid over-engineering or creating unnecessary documentation/testing tasks unless explicitly requested.
+        4.  For each essential step, create a 'TaskNode'. Assign a unique `task_id`.
+        5.  Assign the most appropriate agent from the list of available agents to each task. If no specific agent is available, use 'GeneralAgent' as the default.
+        6.  Define the `dependencies` for each task using the `task_id` of prerequisite tasks.
+        7.  Define the `input_artifact_keys` and `output_artifact_keys` for data flow between tasks.
+        8.  You MUST use the provided 'respond' function to return your TaskGraph as structured JSON data.
+        9.  Ensure the keys in the 'nodes' dictionary are the same as the 'task_id' within each node object.
 
         **JSON Output Format Example:**
         {{
@@ -161,16 +162,22 @@ class PlannerAgent(BaseAgent):
         try:
             # Use function calling for guaranteed JSON response
             if hasattr(self.llm_client, 'invoke_with_schema'):
+                logger.debug(f"Planner prompt length: {len(prompt)} characters")
+                logger.debug(f"Planner schema: {task_graph_schema}")
                 llm_response_str = self.llm_client.invoke_with_schema(prompt, task_graph_schema)
+                logger.debug(f"Planner response: {llm_response_str}")
             else:
                 # Fallback to regular invoke for backward compatibility
                 llm_response_str = self.llm_client.invoke(prompt)
             
             plan_data = json.loads(llm_response_str)
+            logger.debug(f"Parsed plan data: {plan_data}")
 
             # Use Pydantic to parse and validate the entire structure.
             # This is a critical step for ensuring data integrity from the LLM.
             task_graph = TaskGraph(**plan_data)
+            logger.debug(f"TaskGraph nodes: {task_graph.nodes}")
+            logger.debug(f"TaskGraph nodes length: {len(task_graph.nodes) if task_graph.nodes else 0}")
 
             if not task_graph.nodes:
                 return AgentResponse(success=False, message="LLM failed to generate a plan with any tasks.")

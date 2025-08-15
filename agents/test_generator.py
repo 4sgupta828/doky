@@ -92,11 +92,25 @@ class TestGenerationAgent(BaseAgent):
 
         spec = context.get_artifact("technical_spec.md")
         manifest = context.get_artifact("file_manifest.json")
-        if not spec or not manifest:
-            return AgentResponse(success=False, message="Missing required artifacts: 'technical_spec.md' and/or 'file_manifest.json'.")
+        
+        # Handle missing inputs gracefully 
+        if not spec and not manifest:
+            spec = f"User Request: {goal}"
+            files_to_read = []
+            logger.info("No spec or manifest found. Will generate tests based on goal and existing code.")
+        elif not spec:
+            spec = f"User Request: {goal}"
+            files_to_read = manifest.get("files_to_create", [])
+            logger.info("No spec found. Using goal as specification for test generation.")
+        elif not manifest:
+            spec = spec
+            files_to_read = []
+            logger.info("No manifest found. Will infer files to test from workspace.")
+        else:
+            files_to_read = manifest.get("files_to_create", [])
 
         code_to_test = {}
-        files_to_read = manifest.get("files_to_create", [])
+        # files_to_read is already set above based on manifest availability
         for file_path in files_to_read:
             if not file_path.startswith("tests/"):
                 content = context.workspace.get_file_content(file_path)
