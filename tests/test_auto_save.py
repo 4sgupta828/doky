@@ -4,11 +4,15 @@ Test script for the auto-save and crash recovery functionality.
 """
 
 import logging
+import sys
 import tempfile
 import time
 from pathlib import Path
 from datetime import datetime, timedelta
 import shutil
+
+# Add parent directory to path for imports
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from core.context import GlobalContext
 from core.models import TaskNode

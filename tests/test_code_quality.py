@@ -4,6 +4,12 @@ Test script for code quality level detection and prompt generation.
 """
 
 import logging
+import sys
+from pathlib import Path
+
+# Add parent directory to path for imports
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
 from agents.coder import CodeGenerationAgent, CodeQuality
 from core.context import GlobalContext
 from utils.logger import setup_logger

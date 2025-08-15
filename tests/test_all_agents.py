@@ -9,6 +9,9 @@ import sys
 from pathlib import Path
 from typing import Dict, Any
 
+# Add parent directory to path for imports
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
 # Import the agent system components
 from agents import AGENT_REGISTRY, BaseAgent, get_agent
 from core.context import GlobalContext
