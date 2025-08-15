@@ -1,7 +1,8 @@
 # agents/coder.py
 import json
 import logging
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Literal
+from enum import Enum
 
 # Foundational dependencies
 from .base import BaseAgent
@@ -10,6 +11,14 @@ from core.models import AgentResponse, TaskNode
 
 # Get a logger instance for this module
 logger = logging.getLogger(__name__)
+
+
+# --- Code Quality Levels ---
+class CodeQuality(Enum):
+    """Defines different code quality levels for speed vs quality trade-offs."""
+    FAST = "fast"          # Quick, working code - prioritizes speed
+    DECENT = "decent"      # Balanced approach - good quality, reasonable speed (default)
+    PRODUCTION = "production"  # High-quality, well-documented, robust code
 
 
 # --- Real LLM Integration Placeholder ---
@@ -27,18 +36,83 @@ class CodeGenerationAgent(BaseAgent):
     produces the corresponding code, writing it to the workspace.
     """
 
-    def __init__(self, llm_client: Any = None):
+    def __init__(self, llm_client: Any = None, default_quality: CodeQuality = CodeQuality.FAST):
         super().__init__(
             name="CodeGenerationAgent",
             description="Writes, modifies, and refactors application code based on a spec."
         )
         self.llm_client = llm_client or LLMClient()
+        self.default_quality = default_quality
 
-    def _build_prompt(self, files_to_generate: List[str], spec: str, existing_code: Dict[str, str]) -> str:
+    def _get_quality_instructions(self, quality: CodeQuality) -> Dict[str, str]:
+        """Returns quality-specific instructions and descriptions."""
+        quality_configs = {
+            CodeQuality.FAST: {
+                "description": "working Python code quickly",
+                "instructions": [
+                    "Focus on getting working code fast - don't over-engineer",
+                    "Use simple, straightforward implementations", 
+                    "Minimal comments - only where absolutely necessary",
+                    "Basic error handling (try/except where critical)",
+                    "Prioritize functionality over optimization",
+                    "Use standard library when possible to avoid dependencies"
+                ]
+            },
+            CodeQuality.DECENT: {
+                "description": "clean, well-structured Python code",
+                "instructions": [
+                    "Write clean, readable code with good structure",
+                    "Include reasonable comments for complex logic",
+                    "Use appropriate data structures and patterns",
+                    "Add basic error handling and validation",
+                    "Follow Python conventions (PEP 8 style)",
+                    "Balance between speed and maintainability"
+                ]
+            },
+            CodeQuality.PRODUCTION: {
+                "description": "production-quality, enterprise-ready Python code",
+                "instructions": [
+                    "Write robust, production-ready code with comprehensive error handling",
+                    "Include detailed docstrings and inline comments",
+                    "Implement proper logging and monitoring hooks",
+                    "Add input validation and edge case handling",
+                    "Use type hints and follow strict PEP 8 compliance",
+                    "Consider scalability, security, and maintainability",
+                    "Include configuration management and environment handling"
+                ]
+            }
+        }
+        return quality_configs[quality]
+    
+    def _detect_quality_level(self, goal: str, context: GlobalContext) -> CodeQuality:
+        """Detects the desired code quality level from the goal and context."""
+        goal_lower = goal.lower()
+        
+        # Check for explicit quality keywords in the goal
+        if any(keyword in goal_lower for keyword in ['fast', 'quick', 'rapid', 'prototype', 'draft']):
+            logger.info("Detected FAST quality level from goal keywords")
+            return CodeQuality.FAST
+        elif any(keyword in goal_lower for keyword in ['production', 'enterprise', 'robust', 'comprehensive', 'high.quality']):
+            logger.info("Detected PRODUCTION quality level from goal keywords")
+            return CodeQuality.PRODUCTION
+        
+        # Check context for quality preferences (could be set by user commands or previous tasks)
+        if hasattr(context, 'code_quality_preference'):
+            return context.code_quality_preference
+            
+        # Default to FAST for speed optimization
+        logger.info("Using default FAST quality level")
+        return self.default_quality
+    
+    def _build_prompt(self, files_to_generate: List[str], spec: str, existing_code: Dict[str, str], quality: CodeQuality = None) -> str:
         """
         Constructs a detailed prompt to guide the LLM in generating code for a
         specific set of files, or to determine appropriate files if none specified.
         """
+        if quality is None:
+            quality = self.default_quality
+            
+        quality_config = self._get_quality_instructions(quality)
         existing_code_str = "\n".join(
             f"--- File: {path} ---\n```python\n{content}\n```"
             for path, content in existing_code.items()
@@ -53,10 +127,15 @@ class CodeGenerationAgent(BaseAgent):
         **Files to Generate/Modify:**
         No specific files specified. Please determine the appropriate file(s) to create based on the specification."""
 
+        # Build quality-specific instructions
+        quality_instructions = "\n        ".join([f"{i+1}.  {instruction}" for i, instruction in enumerate(quality_config["instructions"])])
+        
         return f"""
-        You are an expert software developer. Your task is to write production-quality Python code
+        You are an expert software developer. Your task is to write {quality_config["description"]}
         based on the provided technical specification.
-
+        
+        **Code Quality Level: {quality.value.upper()}**
+        
         **Technical Specification:**
         ---
         {spec}
@@ -68,15 +147,16 @@ class CodeGenerationAgent(BaseAgent):
         {existing_code_str if existing_code else "No existing code provided. You are writing these files from scratch."}
         ---
 
-        **Instructions:**
-        1.  Adhere strictly to the technical specification.
-        2.  Write clean, efficient, and well-commented code.
-        3.  Ensure all necessary imports are included in each file.
-        4.  Choose appropriate filenames if none were specified (e.g., "main.py", "utils.py", etc.).
-        5.  You MUST generate at least one file with actual code content.
-        6.  Your output MUST be a single, valid JSON object. This object should be a dictionary
-            where keys are the file paths and values are the complete code content for that file as a string.
-        7.  Do NOT return an empty dictionary {{}} - always generate at least one file.
+        **Quality-Specific Instructions:**
+        {quality_instructions}
+        
+        **General Requirements:**
+        - Adhere strictly to the technical specification
+        - Ensure all necessary imports are included in each file
+        - Choose appropriate filenames if none were specified (e.g., "main.py", "utils.py", etc.)
+        - You MUST generate at least one file with actual code content
+        - Your output MUST be a single, valid JSON object with file paths as keys and code content as values
+        - Do NOT return an empty dictionary {{}} - always generate at least one file
 
         **JSON Output Format Example:**
         {{
@@ -164,7 +244,11 @@ class CodeGenerationAgent(BaseAgent):
             }
 
             try:
-                prompt = self._build_prompt(files_to_generate, tech_spec, existing_code)
+                # Detect quality level from goal and context
+                quality_level = self._detect_quality_level(goal, context)
+                logger.info(f"Using code quality level: {quality_level.value.upper()}")
+                
+                prompt = self._build_prompt(files_to_generate, tech_spec, existing_code, quality_level)
                 logger.debug(f"Built prompt with {len(prompt)} characters")
                 
                 # Use regular invoke by default, fall back to function calling if needed
