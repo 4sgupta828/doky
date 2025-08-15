@@ -267,6 +267,16 @@ class TestGenerationAgent(BaseAgent):
         except Exception as e:
             return AgentResponse(success=False, message=f"An unexpected error occurred during test generation: {e}")
 
+        # Display the generated test code using enhanced UI
+        if len(generated_tests_map) == 1:
+            # Single test file - show as code snippet
+            file_path, content = next(iter(generated_tests_map.items()))
+            code_with_filename = {"content": content, "filename": file_path}
+            self.report_intermediate_output("code_snippet", code_with_filename)
+        else:
+            # Multiple test files - show as code files
+            self.report_intermediate_output("code_files", generated_tests_map)
+
         written_files = []
         for file_path, code_content in generated_tests_map.items():
             context.workspace.write_file_content(file_path, code_content, current_task.task_id)

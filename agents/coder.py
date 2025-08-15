@@ -323,6 +323,17 @@ class CodeGenerationAgent(BaseAgent):
                 
                 logger.info(f"LLM generated code for {len(generated_code_map)} files: {list(generated_code_map.keys())}")
 
+                # Display the generated code using enhanced UI
+                if len(generated_code_map) == 1:
+                    # Single file - show as code snippet
+                    file_path, content = next(iter(generated_code_map.items()))
+                    # Create a special content wrapper that includes filename info
+                    code_with_filename = {"content": content, "filename": file_path}
+                    self.report_intermediate_output("code_snippet", code_with_filename)
+                else:
+                    # Multiple files - show as code files
+                    self.report_intermediate_output("code_files", generated_code_map)
+
             except NotImplementedError as e:
                 msg = f"Cannot execute code generation: {e}"
                 logger.critical(msg)
@@ -341,6 +352,7 @@ class CodeGenerationAgent(BaseAgent):
             # 4. Write the generated code to the workspace.
             written_files = []
             skipped_files = []
+            modified_files = {}
             
             for file_path, code_content in generated_code_map.items():
                 if not isinstance(code_content, str):
@@ -354,10 +366,20 @@ class CodeGenerationAgent(BaseAgent):
                     continue
                 
                 try:
+                    # Check if this file already exists to create a diff
+                    original_content = context.workspace.get_file_content(file_path)
+                    
                     logger.debug(f"Writing file '{file_path}' with {len(code_content)} characters")
                     context.workspace.write_file_content(file_path, code_content, current_task.task_id)
                     written_files.append(file_path)
                     logger.info(f"Successfully wrote file '{file_path}'")
+                    
+                    # Track modified files for diff display
+                    if original_content and original_content != code_content:
+                        modified_files[file_path] = {
+                            "old": original_content,
+                            "new": code_content
+                        }
                 except Exception as e:
                     msg = f"Failed to write file '{file_path}' to workspace. Error: {e}"
                     logger.error(msg, exc_info=True)
@@ -370,6 +392,11 @@ class CodeGenerationAgent(BaseAgent):
                     error_details += f" Skipped files: {skipped_files}"
                 logger.error(error_details)
                 return AgentResponse(success=False, message=error_details)
+
+            # Display diff for modified files
+            if modified_files:
+                self.report_intermediate_output("code_diff", modified_files)
+                logger.info(f"Displayed diff for {len(modified_files)} modified files")
 
             return AgentResponse(
                 success=True,

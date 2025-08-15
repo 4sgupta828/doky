@@ -232,6 +232,25 @@ class CollaborationUI:
 
     def display_intermediate_output(self, agent_name: str, output_type: str, content: Any, preview_lines: int = 10):
         """Shows intermediate outputs like generated code, specs, etc. with preview."""
+        if output_type == "code_diff" and isinstance(content, dict):
+            self.display_code_diff(agent_name, content)
+        elif output_type == "code_snippet":
+            if isinstance(content, dict) and "content" in content and "filename" in content:
+                self.display_code_snippet(agent_name, content["content"], content["filename"])
+            elif isinstance(content, str):
+                self.display_code_snippet(agent_name, content, "code")
+            else:
+                self._display_original_intermediate_output(agent_name, output_type, content, preview_lines)
+        elif output_type == "code" and isinstance(content, str):
+            self.display_code_snippet(agent_name, content, "code")
+        elif output_type == "code_files" and isinstance(content, dict):
+            self.display_code_files(agent_name, content)
+        else:
+            # Fallback to original display method
+            self._display_original_intermediate_output(agent_name, output_type, content, preview_lines)
+    
+    def _display_original_intermediate_output(self, agent_name: str, output_type: str, content: Any, preview_lines: int = 10):
+        """Original intermediate output display method."""
         print(f"\n📄 {Style.Fg.INFO}{agent_name}{Style.RESET} generated {Style.Fg.CODE}{output_type}{Style.RESET}:")
         print(f"   {Style.Fg.MUTED}" + "─" * 76 + f"{Style.RESET}")
         
@@ -244,6 +263,87 @@ class CollaborationUI:
         else:
             print(f"   {str(content)[:300]}{'...' if len(str(content)) > 300 else ''}")
         print(f"   {Style.Fg.MUTED}" + "─" * 76 + f"{Style.RESET}")
+    
+    def display_code_snippet(self, agent_name: str, content: str, filename: str = "code"):
+        """Displays a code snippet with syntax highlighting and line numbers."""
+        print(f"\n📝 {Style.Fg.INFO}{agent_name}{Style.RESET} generated {Style.Fg.CODE}{filename}{Style.RESET}:")
+        print(f"   {Style.Fg.MUTED}┌" + "─" * 76 + f"┐{Style.RESET}")
+        
+        lines = content.split('\n')
+        max_line_num_width = len(str(len(lines)))
+        
+        for i, line in enumerate(lines, 1):
+            line_num = f"{i:>{max_line_num_width}}"
+            print(f"   {Style.Fg.MUTED}│{Style.RESET} {Style.Fg.MUTED}{line_num}{Style.RESET} │ {line}")
+        
+        print(f"   {Style.Fg.MUTED}└" + "─" * 76 + f"┘{Style.RESET}")
+        print(f"   {Style.Fg.MUTED}Lines: {len(lines)}{Style.RESET}")
+    
+    def display_code_diff(self, agent_name: str, diff_data: dict):
+        """Displays GitHub-style diff for code changes."""
+        print(f"\n🔄 {Style.Fg.INFO}{agent_name}{Style.RESET} generated {Style.Fg.CODE}code diff{Style.RESET}:")
+        
+        for file_path, changes in diff_data.items():
+            print(f"\n   {Style.Fg.CODE}📁 {file_path}{Style.RESET}")
+            print(f"   {Style.Fg.MUTED}──────────────────────────────────────────{Style.RESET}")
+            
+            if isinstance(changes, dict) and 'old' in changes and 'new' in changes:
+                old_lines = changes['old'].split('\n') if changes['old'] else []
+                new_lines = changes['new'].split('\n') if changes['new'] else []
+                
+                # Simple diff implementation
+                self._display_simple_diff(old_lines, new_lines)
+            elif isinstance(changes, str):
+                # New file
+                print(f"   {Style.Fg.SUCCESS}+++ New file{Style.RESET}")
+                lines = changes.split('\n')
+                for i, line in enumerate(lines, 1):
+                    print(f"   {Style.Fg.SUCCESS}+{i:3}{Style.RESET} │ {line}")
+    
+    def display_code_files(self, agent_name: str, files_data: dict):
+        """Displays multiple code files with syntax highlighting."""
+        print(f"\n📁 {Style.Fg.INFO}{agent_name}{Style.RESET} generated {Style.Fg.CODE}{len(files_data)} files{Style.RESET}:")
+        
+        for file_path, content in files_data.items():
+            print(f"\n   {Style.Fg.CODE}📄 {file_path}{Style.RESET}")
+            print(f"   {Style.Fg.MUTED}┌" + "─" * 76 + f"┐{Style.RESET}")
+            
+            if isinstance(content, str):
+                lines = content.split('\n')
+                max_line_num_width = len(str(len(lines))) if lines else 1
+                
+                # Show first 20 lines of each file
+                for i, line in enumerate(lines[:20], 1):
+                    line_num = f"{i:>{max_line_num_width}}"
+                    print(f"   {Style.Fg.MUTED}│{Style.RESET} {Style.Fg.MUTED}{line_num}{Style.RESET} │ {line}")
+                
+                if len(lines) > 20:
+                    print(f"   {Style.Fg.MUTED}│ ... ({len(lines) - 20} more lines) ...{Style.RESET}")
+                    
+            print(f"   {Style.Fg.MUTED}└" + "─" * 76 + f"┘{Style.RESET}")
+            print(f"   {Style.Fg.MUTED}Lines: {len(content.split('\n')) if isinstance(content, str) else 0}{Style.RESET}")
+    
+    def _display_simple_diff(self, old_lines: list, new_lines: list):
+        """Displays a simple unified diff between old and new lines."""
+        import difflib
+        
+        diff = list(difflib.unified_diff(
+            old_lines, new_lines, 
+            fromfile='old', tofile='new', 
+            lineterm='', n=3
+        ))
+        
+        for line in diff[3:]:  # Skip the diff header lines
+            if line.startswith('+++') or line.startswith('---'):
+                print(f"   {Style.Fg.MUTED}{line}{Style.RESET}")
+            elif line.startswith('@@'):
+                print(f"   {Style.Fg.INFO}{line}{Style.RESET}")
+            elif line.startswith('+'):
+                print(f"   {Style.Fg.SUCCESS}{line}{Style.RESET}")
+            elif line.startswith('-'):
+                print(f"   {Style.Fg.ERROR}{line}{Style.RESET}")
+            else:
+                print(f"   {Style.Fg.MUTED}{line}{Style.RESET}")
 
     def display_failure_analysis(self, agent_name: str, error: str, troubleshooting_steps: List[str] = None):
         """Shows detailed failure analysis with troubleshooting suggestions."""
