@@ -130,12 +130,28 @@ class TestGenerationAgent(BaseAgent):
         try:
             prompt = self._build_prompt(spec, code_to_test, test_type)
             
-            # Use function calling for guaranteed JSON response
-            if hasattr(self.llm_client, 'invoke_with_schema'):
-                llm_response_str = self.llm_client.invoke_with_schema(prompt, test_generation_schema)
-            else:
-                # Fallback to regular invoke for backward compatibility
-                llm_response_str = self.llm_client.invoke(prompt)
+            # Use regular invoke by default, fall back to function calling if needed
+            logger.debug("Using regular invoke method (primary approach)")
+            llm_response_str = self.llm_client.invoke(prompt)
+            
+            # Check if the response is valid JSON with actual content
+            try:
+                test_parse = json.loads(llm_response_str)
+                if not isinstance(test_parse, dict) or not test_parse:
+                    raise ValueError("Invalid or empty response")
+                logger.debug("Regular invoke succeeded with valid JSON response")
+            except (json.JSONDecodeError, ValueError) as e:
+                logger.warning(f"Regular invoke failed to produce valid JSON ({e}), trying function calling")
+                if hasattr(self.llm_client, 'invoke_with_schema'):
+                    try:
+                        llm_response_str = self.llm_client.invoke_with_schema(prompt, test_generation_schema)
+                        logger.debug("Function calling fallback succeeded")
+                    except Exception as fallback_error:
+                        logger.error(f"Function calling fallback also failed: {fallback_error}")
+                        # Keep the original response from regular invoke for error reporting
+                        pass
+                else:
+                    logger.warning("Function calling not available, keeping original response")
             
             generated_tests_map = json.loads(llm_response_str)
             if not isinstance(generated_tests_map, dict):

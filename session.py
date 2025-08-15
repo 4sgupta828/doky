@@ -172,6 +172,11 @@ class InteractiveSession:
             # Save final snapshot
             self.global_context.save_snapshot()
             
+            # Save command history
+            if hasattr(self.ui, 'input_handler'):
+                self.ui.input_handler.save_history()
+                logger.info("Command history saved.")
+            
             # Save session summary
             task_count = len(self.global_context.task_graph.nodes)
             artifact_count = len(self.global_context.artifacts)

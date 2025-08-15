@@ -141,7 +141,10 @@ Large sections contributing to context:
                 if frame and frame.f_code.co_filename.endswith('.py'):
                     filename = frame.f_code.co_filename.split('/')[-1]
                     if 'agent' in filename.lower() or filename in ['orchestrator.py', 'planner.py']:
-                        class_name = frame.f_locals.get('self', {})..__class__.__name__ if 'self' in frame.f_locals else 'Unknown'
+                        if 'self' in frame.f_locals:
+                            class_name = frame.f_locals['self'].__class__.__name__
+                        else:
+                            class_name = 'Unknown'
                         function_name = frame.f_code.co_name
                         return f"{class_name}.{function_name} ({filename})"
             return "Unknown caller"

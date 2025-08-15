@@ -9,6 +9,7 @@ from typing import Dict, Any
 # Foundational dependencies
 from core.context import GlobalContext
 from core.models import TaskGraph, TaskNode, AgentResponse
+from utils.input_handler import get_input_handler
 
 # Get a logger instance for this module
 logger = logging.getLogger(__name__)
@@ -32,6 +33,20 @@ class CollaborationUI:
     Provides a rich, interactive, terminal-based interface for human-in-the-loop collaboration.
     This class manages all direct user interaction, providing a fluid and intuitive experience.
     """
+    
+    def __init__(self):
+        """Initialize the CollaborationUI with enhanced input capabilities."""
+        # Store command history in system-appropriate location, separate from project data
+        if sys.platform == "darwin":  # macOS
+            history_dir = os.path.expanduser("~/Library/Application Support/doky")
+        elif sys.platform == "win32":  # Windows
+            history_dir = os.path.expanduser("~/AppData/Local/doky")
+        else:  # Linux/Unix
+            history_dir = os.path.expanduser("~/.local/share/doky")
+        
+        os.makedirs(history_dir, exist_ok=True)
+        history_file = os.path.join(history_dir, "command_history.txt")
+        self.input_handler = get_input_handler(history_file)
 
     def display_status(self, context: GlobalContext, execution_summary: str = None):
         """
@@ -91,9 +106,9 @@ class CollaborationUI:
         print(f"❓ {Style.Fg.BLUE}{Style.BOLD}ACTION REQUIRED{Style.RESET}")
         print(f"  > {prompt}")
         print("-"*80)
-        user_response = input("Your response: ")
+        user_response = self.input_handler.prompt("Your response: ")
         logger.info(f"User was prompted with '{prompt}' and responded: '{user_response}'")
-        return user_response.strip()
+        return user_response
 
     def prompt_for_confirmation(self, question: str) -> bool:
         """
@@ -104,7 +119,7 @@ class CollaborationUI:
         print(f"⚠️ {Style.Fg.YELLOW}{Style.BOLD}APPROVAL REQUIRED{Style.RESET}")
         print(f"  > {question}")
         print("-"*80)
-        response = input("Do you want to proceed? (yes/no): ").lower().strip()
+        response = self.input_handler.prompt("Do you want to proceed? (yes/no): ").lower()
         return response in ["y", "yes"]
 
     def display_system_message(self, message: str, is_error: bool = False):
@@ -144,7 +159,7 @@ class CollaborationUI:
         print("-" * 80)
         
         while True:
-            choice = input("Your choice (approve/refine/cancel): ").lower().strip()
+            choice = self.input_handler.prompt("Your choice (approve/refine/cancel): ").lower()
             if choice in ["approve", "refine", "cancel"]:
                 logger.info(f"User chose: {choice}")
                 return choice

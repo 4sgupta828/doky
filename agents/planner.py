@@ -160,15 +160,30 @@ class PlannerAgent(BaseAgent):
         }
 
         try:
-            # Use function calling for guaranteed JSON response
-            if hasattr(self.llm_client, 'invoke_with_schema'):
-                logger.debug(f"Planner prompt length: {len(prompt)} characters")
-                logger.debug(f"Planner schema: {task_graph_schema}")
-                llm_response_str = self.llm_client.invoke_with_schema(prompt, task_graph_schema)
-                logger.debug(f"Planner response: {llm_response_str}")
-            else:
-                # Fallback to regular invoke for backward compatibility
-                llm_response_str = self.llm_client.invoke(prompt)
+            # Use regular invoke by default, fall back to function calling if needed
+            logger.debug("Using regular invoke method (primary approach)")
+            llm_response_str = self.llm_client.invoke(prompt)
+            
+            # Check if the response is valid JSON with actual content
+            try:
+                test_parse = json.loads(llm_response_str)
+                if not isinstance(test_parse, dict) or not test_parse.get('nodes'):
+                    raise ValueError("Invalid or empty response")
+                logger.debug("Regular invoke succeeded with valid JSON response")
+            except (json.JSONDecodeError, ValueError) as e:
+                logger.warning(f"Regular invoke failed to produce valid JSON ({e}), trying function calling")
+                if hasattr(self.llm_client, 'invoke_with_schema'):
+                    try:
+                        logger.debug(f"Planner prompt length: {len(prompt)} characters")
+                        logger.debug(f"Planner schema: {task_graph_schema}")
+                        llm_response_str = self.llm_client.invoke_with_schema(prompt, task_graph_schema)
+                        logger.debug("Function calling fallback succeeded")
+                    except Exception as fallback_error:
+                        logger.error(f"Function calling fallback also failed: {fallback_error}")
+                        # Keep the original response from regular invoke for error reporting
+                        pass
+                else:
+                    logger.warning("Function calling not available, keeping original response")
             
             plan_data = json.loads(llm_response_str)
             logger.debug(f"Parsed plan data: {plan_data}")

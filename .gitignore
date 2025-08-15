@@ -17,6 +17,12 @@ logs/
 # Temporary test workspaces
 *workspace_temp/
 mission_workspace/
+/tmp/test_*
+
+# User runtime data (should be in system dirs, not project)
+.doky/
+command_history.txt
+*.history
 
 # IDE files
 .vscode/
