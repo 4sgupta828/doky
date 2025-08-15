@@ -1,6 +1,7 @@
 # agents/spec_generator.py
 import logging
-from typing import Any
+from typing import Any, Dict
+from enum import Enum
 
 # Foundational dependencies
 from .base import BaseAgent
@@ -9,6 +10,14 @@ from core.models import AgentResponse, TaskNode
 
 # Get a logger instance for this module
 logger = logging.getLogger(__name__)
+
+
+# --- Specification Quality Levels ---
+class SpecQuality(Enum):
+    """Defines different specification quality levels for speed vs detail trade-offs."""
+    FAST = "fast"          # Quick, basic specs - prioritizes speed
+    DECENT = "decent"      # Balanced approach - good structure, reasonable detail (default)
+    PRODUCTION = "production"  # Comprehensive, detailed specs with full considerations
 
 
 # --- Real LLM Integration Placeholder ---
@@ -25,15 +34,80 @@ class SpecGenerationAgent(BaseAgent):
     into a formal technical specification using a Large Language Model.
     """
 
-    def __init__(self, llm_client: Any = None):
+    def __init__(self, llm_client: Any = None, default_quality: SpecQuality = SpecQuality.FAST):
         super().__init__(
             name="SpecGenerationAgent",
             description="Creates detailed technical specifications and API definitions from requirements."
         )
         self.llm_client = llm_client or LLMClient()
+        self.default_quality = default_quality
 
-    def _build_prompt(self, requirements: str, is_fallback: bool = False) -> str:
+    def _get_quality_instructions(self, quality: SpecQuality) -> Dict[str, str]:
+        """Returns quality-specific instructions and descriptions."""
+        quality_configs = {
+            SpecQuality.FAST: {
+                "description": "a basic, functional technical specification",
+                "instructions": [
+                    "Focus on core functionality and essential requirements",
+                    "Define basic data models with key fields only",
+                    "Outline main API endpoints without extensive detail",
+                    "Include fundamental business logic descriptions",
+                    "Keep documentation concise and to-the-point"
+                ]
+            },
+            SpecQuality.DECENT: {
+                "description": "a well-structured, comprehensive technical specification",
+                "instructions": [
+                    "Define detailed data models with proper types, constraints, and relationships",
+                    "Specify complete API endpoints with request/response schemas",
+                    "Include clear business logic descriptions with validation rules",
+                    "Add reasonable error handling and edge case considerations",
+                    "Structure the document logically with good organization"
+                ]
+            },
+            SpecQuality.PRODUCTION: {
+                "description": "a comprehensive, enterprise-ready technical specification",
+                "instructions": [
+                    "Create exhaustive data models with full validation, indexing, and relationship details",
+                    "Define complete API specifications with authentication, authorization, and rate limiting",
+                    "Include comprehensive business logic with all edge cases and error scenarios",
+                    "Add security considerations, performance requirements, and scalability notes",
+                    "Include deployment, monitoring, and operational considerations",
+                    "Add detailed documentation standards and code quality requirements"
+                ]
+            }
+        }
+        return quality_configs[quality]
+    
+    def _detect_quality_level(self, goal: str, context: GlobalContext) -> SpecQuality:
+        """Detects the desired specification quality level from the goal and context."""
+        goal_lower = goal.lower()
+        
+        # Check for explicit quality keywords in the goal
+        if any(keyword in goal_lower for keyword in ['fast', 'quick', 'basic', 'simple', 'minimal']):
+            logger.info("Detected FAST spec quality level from goal keywords")
+            return SpecQuality.FAST
+        elif any(keyword in goal_lower for keyword in ['decent', 'detailed', 'comprehensive', 'structured', 'thorough']):
+            logger.info("Detected DECENT spec quality level from goal keywords")
+            return SpecQuality.DECENT
+        elif any(keyword in goal_lower for keyword in ['production', 'enterprise', 'complete', 'exhaustive', 'robust']):
+            logger.info("Detected PRODUCTION spec quality level from goal keywords")
+            return SpecQuality.PRODUCTION
+        
+        # Check context for quality preferences
+        if hasattr(context, 'spec_quality_preference'):
+            return context.spec_quality_preference
+            
+        # Default to FAST for speed optimization
+        logger.info("Using default FAST spec quality level")
+        return self.default_quality
+
+    def _build_prompt(self, requirements: str, is_fallback: bool = False, quality: SpecQuality = None) -> str:
         """Constructs a precise prompt to guide the LLM in generating a technical spec."""
+        if quality is None:
+            quality = self.default_quality
+            
+        quality_config = self._get_quality_instructions(quality)
         
         if is_fallback:
             content_type = "user goal"
@@ -42,19 +116,26 @@ class SpecGenerationAgent(BaseAgent):
             content_type = "clarified requirements"  
             content_description = "the following clarified user requirements into a detailed technical specification"
             
+        # Build quality-specific instructions
+        quality_instructions = "\n        ".join([f"{i+1}. {instruction}" for i, instruction in enumerate(quality_config["instructions"])])
+        
         return f"""
-        You are an expert software architect. Your task is to convert {content_description} in Markdown format.
+        You are an expert software architect. Your task is to convert {content_description} to create {quality_config["description"]} in Markdown format.
+        
+        **Specification Quality Level: {quality.value.upper()}**
 
         **{content_type.title()}:**
         ---
         {requirements}
         ---
 
-        **Instructions:**
-        1.  Define the necessary **Data Models** with fields, types, and constraints (e.g., `user_id: UUID, primary_key`).
-        2.  Define the **API Endpoints** with HTTP methods, paths, request bodies, and success/error responses.
-        3.  Describe the core **Business Logic** for each endpoint in clear, unambiguous terms.
-        4.  The output MUST be a single, well-formatted Markdown document. Do not include any other text or commentary.
+        **Quality-Specific Instructions:**
+        {quality_instructions}
+        
+        **General Requirements:**
+        - The output MUST be a single, well-formatted Markdown document
+        - Do not include any other text or commentary
+        - Structure the document with clear sections and headers
         
         {'' if not is_fallback else 'Note: Since only the user goal was provided, make reasonable assumptions about requirements and clearly document any assumptions made in the specification.'}
         """
@@ -79,7 +160,11 @@ class SpecGenerationAgent(BaseAgent):
             })
 
         try:
-            prompt = self._build_prompt(requirements_doc, is_fallback=is_fallback)
+            # Detect quality level from goal and context
+            quality_level = self._detect_quality_level(goal, context)
+            logger.info(f"Using spec quality level: {quality_level.value.upper()}")
+            
+            prompt = self._build_prompt(requirements_doc, is_fallback=is_fallback, quality=quality_level)
             technical_spec = self.llm_client.invoke(prompt)
 
             if not technical_spec or not isinstance(technical_spec, str):

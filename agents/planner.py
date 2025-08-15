@@ -2,6 +2,7 @@
 import json
 import logging
 from typing import Dict, Any, List
+from enum import Enum
 
 # Foundational dependencies from Tier 1
 from .base import BaseAgent, ContextTooLargeError
@@ -10,6 +11,14 @@ from core.models import AgentResponse, TaskGraph, TaskNode, ValidationError
 
 # Get a logger instance for this module.
 logger = logging.getLogger(__name__)
+
+
+# --- Planning Quality Levels ---
+class PlanningQuality(Enum):
+    """Defines different planning quality levels for speed vs detail trade-offs."""
+    FAST = "fast"          # Quick, minimal plans - prioritizes speed
+    DECENT = "decent"      # Balanced approach - good structure, reasonable detail (default)
+    PRODUCTION = "production"  # Comprehensive, detailed plans with full considerations
 
 
 # --- Real LLM Integration Placeholder ---
@@ -51,7 +60,7 @@ class PlannerAgent(BaseAgent):
     can be executed by the other specialized agents.
     """
 
-    def __init__(self, llm_client: Any = None, agent_capabilities: List[Dict] = None):
+    def __init__(self, llm_client: Any = None, agent_capabilities: List[Dict] = None, default_quality: PlanningQuality = PlanningQuality.FAST):
         """
         Initializes the PlannerAgent.
 
@@ -66,13 +75,83 @@ class PlannerAgent(BaseAgent):
         )
         self.llm_client = llm_client or LLMClient()
         self.agent_capabilities = agent_capabilities or []
+        self.default_quality = default_quality
 
-    def _build_prompt(self, goal: str, context_summary: Dict[str, Any]) -> str:
+    def _get_quality_instructions(self, quality: PlanningQuality) -> Dict[str, str]:
+        """Returns quality-specific instructions and descriptions."""
+        quality_configs = {
+            PlanningQuality.FAST: {
+                "description": "a minimal, efficient task plan",
+                "instructions": [
+                    "Keep plans as SIMPLE as possible - create 1-2 tasks maximum for straightforward requests",
+                    "Focus on essential steps only, avoid over-engineering",
+                    "Skip unnecessary documentation or testing tasks unless explicitly requested",
+                    "Use basic task descriptions without extensive detail",
+                    "Prioritize speed and getting started quickly"
+                ]
+            },
+            PlanningQuality.DECENT: {
+                "description": "a well-structured, balanced task plan",
+                "instructions": [
+                    "Create logical, well-organized task sequences",
+                    "Include reasonable detail in task descriptions",
+                    "Consider basic dependencies and data flow",
+                    "Balance thoroughness with practicality",
+                    "Include essential validation and testing steps when appropriate"
+                ]
+            },
+            PlanningQuality.PRODUCTION: {
+                "description": "a comprehensive, enterprise-ready task plan",
+                "instructions": [
+                    "Create detailed, thorough task breakdowns with full considerations",
+                    "Include comprehensive error handling and validation tasks",
+                    "Plan for documentation, testing, and quality assurance",
+                    "Consider scalability, security, and maintainability aspects",
+                    "Include detailed dependency analysis and risk mitigation",
+                    "Plan for deployment, monitoring, and operational considerations"
+                ]
+            }
+        }
+        return quality_configs[quality]
+    
+    def _detect_quality_level(self, goal: str, context: GlobalContext) -> PlanningQuality:
+        """Detects the desired planning quality level from the goal and context."""
+        goal_lower = goal.lower()
+        
+        # Check for explicit quality keywords in the goal
+        if any(keyword in goal_lower for keyword in ['fast', 'quick', 'rapid', 'simple', 'minimal']):
+            logger.info("Detected FAST planning quality level from goal keywords")
+            return PlanningQuality.FAST
+        elif any(keyword in goal_lower for keyword in ['decent', 'structured', 'balanced', 'organized', 'thorough']):
+            logger.info("Detected DECENT planning quality level from goal keywords")
+            return PlanningQuality.DECENT
+        elif any(keyword in goal_lower for keyword in ['production', 'enterprise', 'comprehensive', 'detailed', 'robust']):
+            logger.info("Detected PRODUCTION planning quality level from goal keywords")
+            return PlanningQuality.PRODUCTION
+        
+        # Check context for quality preferences
+        if hasattr(context, 'planning_quality_preference'):
+            return context.planning_quality_preference
+            
+        # Default to FAST for speed optimization
+        logger.info("Using default FAST planning quality level")
+        return self.default_quality
+
+    def _build_prompt(self, goal: str, context_summary: Dict[str, Any], quality: PlanningQuality = None) -> str:
         """Constructs a detailed, high-quality prompt to guide the LLM."""
+        if quality is None:
+            quality = self.default_quality
+            
+        quality_config = self._get_quality_instructions(quality)
+        
+        # Build quality-specific instructions
+        quality_instructions = "\n        ".join([f"{i+1}. {instruction}" for i, instruction in enumerate(quality_config["instructions"])])
+        
         return f"""
         You are the PlannerAgent, a master strategist for an autonomous AI agent collective.
-        Your mission is to decompose a high-level user goal into a structured, dependency-aware
-        TaskGraph in JSON format.
+        Your mission is to decompose a high-level user goal into {quality_config["description"]} in JSON format.
+        
+        **Planning Quality Level: {quality.value.upper()}**
 
         **User Goal:**
         {goal}
@@ -83,16 +162,17 @@ class PlannerAgent(BaseAgent):
         **Current Workspace Context:**
         {json.dumps(context_summary, indent=2)}
 
-        **Instructions:**
-        1.  Analyze the user goal and the available agents.
-        2.  Keep plans as SIMPLE as possible. For straightforward requests like "write a program", create 1-2 tasks maximum.
-        3.  Break the goal down into essential steps only. Avoid over-engineering or creating unnecessary documentation/testing tasks unless explicitly requested.
-        4.  For each essential step, create a 'TaskNode'. Assign a unique `task_id`.
-        5.  Assign the most appropriate agent from the list of available agents to each task. If no specific agent is available, use 'GeneralAgent' as the default.
-        6.  Define the `dependencies` for each task using the `task_id` of prerequisite tasks.
-        7.  Define the `input_artifact_keys` and `output_artifact_keys` for data flow between tasks.
-        8.  You MUST use the provided 'respond' function to return your TaskGraph as structured JSON data.
-        9.  Ensure the keys in the 'nodes' dictionary are the same as the 'task_id' within each node object.
+        **Quality-Specific Planning Instructions:**
+        {quality_instructions}
+        
+        **General Instructions:**
+        1. Analyze the user goal and the available agents
+        2. For each step, create a 'TaskNode' with a unique `task_id`
+        3. Assign the most appropriate agent from the list of available agents to each task
+        4. Define the `dependencies` for each task using the `task_id` of prerequisite tasks
+        5. Define the `input_artifact_keys` and `output_artifact_keys` for data flow between tasks
+        6. You MUST return your TaskGraph as structured JSON data
+        7. Ensure the keys in the 'nodes' dictionary are the same as the 'task_id' within each node object
 
         **JSON Output Format Example:**
         {{
@@ -125,7 +205,12 @@ class PlannerAgent(BaseAgent):
         logger.info(f"PlannerAgent executing with goal: '{goal}'")
 
         context_summary = {"files_in_workspace": context.workspace.list_files()}
-        prompt = self._build_prompt(goal, context_summary)
+        
+        # Detect quality level from goal and context
+        quality_level = self._detect_quality_level(goal, context)
+        logger.info(f"Using planning quality level: {quality_level.value.upper()}")
+        
+        prompt = self._build_prompt(goal, context_summary, quality_level)
 
         # Define JSON schema for guaranteed structured response
         task_graph_schema = {

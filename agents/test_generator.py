@@ -2,6 +2,7 @@
 import json
 import logging
 from typing import Dict, Any, List, Literal
+from enum import Enum
 
 # Foundational dependencies
 from .base import BaseAgent
@@ -10,6 +11,14 @@ from core.models import AgentResponse, TaskNode
 
 # Get a logger instance for this module
 logger = logging.getLogger(__name__)
+
+
+# --- Test Quality Levels ---
+class TestQuality(Enum):
+    """Defines different test quality levels for speed vs thoroughness trade-offs."""
+    FAST = "fast"          # Quick, basic tests - prioritizes speed
+    DECENT = "decent"      # Balanced approach - good coverage, reasonable detail (default)
+    PRODUCTION = "production"  # Comprehensive, thorough tests with full edge case coverage
 
 
 # --- Real LLM Integration Placeholder ---
@@ -26,12 +35,13 @@ class TestGenerationAgent(BaseAgent):
     focused unit tests and broader integration tests based on the task goal.
     """
 
-    def __init__(self, llm_client: Any = None):
+    def __init__(self, llm_client: Any = None, default_quality: TestQuality = TestQuality.FAST):
         super().__init__(
             name="TestGenerationAgent",
             description="Generates unit and integration tests for application code."
         )
         self.llm_client = llm_client or LLMClient()
+        self.default_quality = default_quality
 
     def _determine_test_type(self, goal: str) -> Literal["unit", "integration"]:
         """Analyzes the goal to determine what kind of test to write."""
@@ -40,32 +50,120 @@ class TestGenerationAgent(BaseAgent):
         # Default to unit tests for specificity and speed.
         return "unit"
 
-    def _build_prompt(self, spec: str, code_to_test: Dict[str, str], test_type: Literal["unit", "integration"]) -> str:
+    def _get_quality_instructions(self, quality: TestQuality, test_type: Literal["unit", "integration"]) -> Dict[str, str]:
+        """Returns quality-specific instructions and descriptions."""
+        if test_type == "unit":
+            quality_configs = {
+                TestQuality.FAST: {
+                    "description": "basic unit tests with essential coverage",
+                    "instructions": [
+                        "Write focused pytest tests for main functions and classes",
+                        "Test basic success cases and obvious error conditions",
+                        "Use simple mocking for external dependencies",
+                        "Keep test structure simple and straightforward"
+                    ]
+                },
+                TestQuality.DECENT: {
+                    "description": "comprehensive unit tests with good coverage",
+                    "instructions": [
+                        "Write thorough pytest unit tests for all functions and classes",
+                        "Mock external dependencies using unittest.mock effectively",
+                        "Test success cases, edge cases, and error conditions using pytest.raises",
+                        "Include reasonable test data variety and boundary conditions"
+                    ]
+                },
+                TestQuality.PRODUCTION: {
+                    "description": "exhaustive unit tests with complete coverage",
+                    "instructions": [
+                        "Write comprehensive pytest unit tests covering all code paths",
+                        "Implement sophisticated mocking strategies for complex dependencies",
+                        "Test all success cases, edge cases, error conditions, and boundary values",
+                        "Include parametrized tests for data variety and comprehensive fixtures",
+                        "Add performance tests and memory usage considerations where appropriate"
+                    ]
+                }
+            }
+        else:  # integration
+            quality_configs = {
+                TestQuality.FAST: {
+                    "description": "basic integration tests for key workflows",
+                    "instructions": [
+                        "Write pytest integration tests for main user workflows",
+                        "Use test client for basic API endpoint testing",
+                        "Focus on happy path scenarios",
+                        "Keep test setup minimal and straightforward"
+                    ]
+                },
+                TestQuality.DECENT: {
+                    "description": "thorough integration tests with good workflow coverage",
+                    "instructions": [
+                        "Write comprehensive pytest integration tests for component interactions",
+                        "Use test client (e.g., Flask's TestClient) for realistic API testing",
+                        "Test end-to-end user flows including error scenarios",
+                        "Include proper test data setup and cleanup"
+                    ]
+                },
+                TestQuality.PRODUCTION: {
+                    "description": "exhaustive integration tests with complete workflow coverage",
+                    "instructions": [
+                        "Write comprehensive integration tests covering all system interactions",
+                        "Implement sophisticated test client usage with authentication and authorization",
+                        "Test complete end-to-end workflows including edge cases and failure modes",
+                        "Include database transaction testing, concurrent access scenarios",
+                        "Add performance and load testing considerations for critical paths"
+                    ]
+                }
+            }
+        return quality_configs[quality]
+    
+    def _detect_quality_level(self, goal: str, context: GlobalContext) -> TestQuality:
+        """Detects the desired test quality level from the goal and context."""
+        goal_lower = goal.lower()
+        
+        # Check for explicit quality keywords in the goal
+        if any(keyword in goal_lower for keyword in ['fast', 'quick', 'basic', 'simple', 'minimal']):
+            logger.info("Detected FAST test quality level from goal keywords")
+            return TestQuality.FAST
+        elif any(keyword in goal_lower for keyword in ['decent', 'thorough', 'comprehensive', 'good', 'complete']):
+            logger.info("Detected DECENT test quality level from goal keywords")
+            return TestQuality.DECENT
+        elif any(keyword in goal_lower for keyword in ['production', 'exhaustive', 'full', 'robust', 'enterprise']):
+            logger.info("Detected PRODUCTION test quality level from goal keywords")
+            return TestQuality.PRODUCTION
+        
+        # Check context for quality preferences
+        if hasattr(context, 'test_quality_preference'):
+            return context.test_quality_preference
+            
+        # Default to FAST for speed optimization
+        logger.info("Using default FAST test quality level")
+        return self.default_quality
+
+    def _build_prompt(self, spec: str, code_to_test: Dict[str, str], test_type: Literal["unit", "integration"], quality: TestQuality = None) -> str:
         """Constructs a detailed prompt for the LLM to generate test code."""
+        if quality is None:
+            quality = self.default_quality
+            
+        quality_config = self._get_quality_instructions(quality, test_type)
         code_blocks = "\n\n".join(
             f"--- File: {path} ---\n```python\n{content}\n```"
             for path, content in code_to_test.items()
         )
 
-        if test_type == "unit":
-            test_instructions = """
-        **Instructions for Unit Tests:**
-        1.  Write focused `pytest` unit tests for individual functions and classes.
-        2.  Mock all external dependencies (e.g., database, APIs) using `unittest.mock`.
-        3.  Test success cases, edge cases, and error conditions (using `pytest.raises`).
-        """
-        else: # integration
-            test_instructions = """
-        **Instructions for Integration Tests:**
-        1.  Write `pytest` integration tests that verify the interaction between multiple components.
-        2.  Use a test client (e.g., Flask's `TestClient`) to make real requests to API endpoints.
-        3.  Focus on end-to-end user flows (e.g., register, login, access protected route).
+        # Build quality-specific instructions
+        quality_instructions = "\n        ".join([f"{i+1}. {instruction}" for i, instruction in enumerate(quality_config["instructions"])])
+        
+        test_instructions = f"""
+        **Instructions for {test_type.title()} Tests ({quality.value.upper()} Quality):**
+        {quality_instructions}
         """
 
         return f"""
         You are an expert QA Engineer specializing in Python. Your task is to write
-        high-quality **{test_type} tests** using the `pytest` framework for the provided source code,
+        {quality_config["description"]} using the `pytest` framework for the provided source code,
         based on its technical specification.
+        
+        **Test Quality Level: {quality.value.upper()}**
 
         **Technical Specification:**
         ---
@@ -128,7 +226,11 @@ class TestGenerationAgent(BaseAgent):
         }
 
         try:
-            prompt = self._build_prompt(spec, code_to_test, test_type)
+            # Detect quality level from goal and context
+            quality_level = self._detect_quality_level(goal, context)
+            logger.info(f"Using test quality level: {quality_level.value.upper()}")
+            
+            prompt = self._build_prompt(spec, code_to_test, test_type, quality_level)
             
             # Use regular invoke by default, fall back to function calling if needed
             logger.debug("Using regular invoke method (primary approach)")
