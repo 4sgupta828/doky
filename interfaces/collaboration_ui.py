@@ -172,11 +172,16 @@ class CollaborationUI:
     def display_help(self, help_text: str):
         """Displays a formatted help menu."""
         print("\n" + "="*80)
-        print(f"📚 {Style.BOLD}AGENT COMMAND HELP{Style.RESET}")
+        print(f"📚 {Style.BOLD}COMMAND HELP{Style.RESET}")
         print("="*80)
         print("To run a high-level goal, just type your request.")
         print("To invoke a specific agent, use one of the following commands:")
         print(help_text)
+        print("\nSession commands:")
+        print("  /clear      - Reset conversation context (saves snapshot first)")
+        print("  /reset      - Same as /clear")
+        print("  exit        - Exit the session")
+        print("  quit        - Same as exit")
         print("="*80)
 
     def _display_artifact_content(self, artifact_key: str, content: Any):

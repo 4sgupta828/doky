@@ -77,7 +77,9 @@ class InteractiveSession:
                     continue
 
                 # --- COMMAND DISPATCHER ---
-                if user_input.startswith('@'):
+                if user_input.lower() in ["/clear", "/reset"]:
+                    self._handle_clear_command()
+                elif user_input.startswith('@'):
                     self._handle_direct_command(user_input)
                 else:
                     self._handle_goal_command(user_input)
@@ -174,6 +176,51 @@ class InteractiveSession:
         self.ui.display_system_message(f"Directly invoking {agent_name}...")
         response = self.orchestrator.execute_single_task(goal, agent_name)
         self.ui.display_direct_command_result(agent_name, response, self.global_context)
+
+    def _handle_clear_command(self):
+        """Handle the /clear or /reset command to reset conversation context."""
+        try:
+            self.ui.display_system_message("Saving snapshot before clearing context...")
+            
+            # Save a final snapshot before clearing
+            from datetime import datetime
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            snapshot_name = f"pre_clear_snapshot_{timestamp}.json"
+            snapshot_path = str(self.global_context.session_dir / snapshot_name)
+            self.global_context.save_snapshot(snapshot_path)
+            
+            # Save session summary with clear event
+            task_count = len(self.global_context.task_graph.nodes)
+            artifact_count = len(self.global_context.artifacts)
+            
+            clear_summary = {
+                "session_cleared": True,
+                "clear_timestamp": datetime.now().isoformat(),
+                "tasks_cleared": task_count,
+                "artifacts_cleared": artifact_count,
+                "events_cleared": len(self.global_context.mission_log),
+                "snapshot_saved": snapshot_path
+            }
+            
+            self.global_context.save_session_memory(clear_summary)
+            
+            # Clear in-memory context
+            self.global_context.task_graph.nodes.clear()
+            self.global_context.artifacts.clear()
+            self.global_context.mission_log.clear()
+            
+            # Log the reset event
+            self.global_context.log_event(
+                "session_reset",
+                {"cleared_at": datetime.now().isoformat(), "snapshot_path": snapshot_path}
+            )
+            
+            self.ui.display_system_message(f"✅ Context cleared successfully. Snapshot saved to: {snapshot_name}")
+            self.ui.display_system_message("Memory reset complete. Ready for new tasks.")
+            
+        except Exception as e:
+            logger.error(f"Failed to clear context: {e}", exc_info=True)
+            self.ui.display_system_message(f"❌ Failed to clear context: {e}", is_error=True)
     
     def _save_session_data(self):
         """Save session data and create a final snapshot before exit."""
