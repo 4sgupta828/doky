@@ -242,7 +242,7 @@ class CodeGenerationAgent(BaseAgent):
             if existing_code:
                 self.report_thinking(f"Found {len(existing_code)} existing files that I'll modify/extend rather than overwrite.")
 
-            # 3. Construct the prompt and invoke the LLM.
+            # 3. Generate all files with single LLM call (sequential, reliable approach)
             # Define JSON schema for guaranteed structured response
             code_generation_schema = {
                 "type": "object",
@@ -409,6 +409,7 @@ class CodeGenerationAgent(BaseAgent):
             logger.setLevel(original_level)
             llm_logger.setLevel(original_llm_level)
             module_logger.setLevel(original_module_level)
+
 
 
 # --- Self-Testing Block ---

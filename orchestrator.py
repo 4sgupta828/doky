@@ -165,8 +165,9 @@ class Orchestrator:
 
     def _run_main_loop(self):
         """
-        The core execution loop that processes the TaskGraph. It continuously finds
-        and executes the next available task until none are left or a deadlock occurs.
+        The core execution loop that processes the TaskGraph sequentially.
+        Sequential execution preserves context and dependencies between tasks.
+        Agents can implement internal parallelism for their specific operations.
         """
         max_loops_without_progress = 10
         loops_without_progress = 0
@@ -226,6 +227,7 @@ class Orchestrator:
                     return task
         return None
 
+
     def _invoke_agent(self, current_task: TaskNode) -> AgentResponse:
         """
         Finds the specified agent in the registry and calls its execute method.
@@ -240,6 +242,12 @@ class Orchestrator:
 
         logging.info(f"Invoking agent '{agent_name}' for task '{current_task.task_id}'...")
         
+        # Enhanced progress feedback - show what's happening
+        print(f"\n🎯 Starting: {agent_name}")
+        print(f"   Task: {current_task.goal[:80]}{'...' if len(current_task.goal) > 80 else ''}")
+        if current_task.dependencies:
+            print(f"   Dependencies: {', '.join(current_task.dependencies)}")
+        
         # Start progress tracking
         self.progress_tracker.start_agent_progress(
             agent_name, current_task.task_id, current_task.goal
@@ -251,6 +259,16 @@ class Orchestrator:
                 agent_to_run.set_progress_tracker(self.progress_tracker, current_task.task_id)
             
             response = agent_to_run.execute(current_task.goal, self.global_context, current_task)
+            
+            # Enhanced completion feedback
+            if response.success:
+                print(f"✅ Completed: {agent_name}")
+                if response.artifacts_generated:
+                    print(f"   Generated: {', '.join(response.artifacts_generated)}")
+                print(f"   Result: {response.message[:100]}{'...' if len(response.message) > 100 else ''}")
+            else:
+                print(f"❌ Failed: {agent_name}")
+                print(f"   Error: {response.message[:100]}{'...' if len(response.message) > 100 else ''}")
             
             # Complete progress tracking
             self.progress_tracker.finish_agent_progress(current_task.task_id, success=response.success)

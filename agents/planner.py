@@ -115,7 +115,7 @@ class PlannerAgent(BaseAgent):
         return quality_configs[quality]
     
     def _detect_quality_level(self, goal: str, context: GlobalContext) -> PlanningQuality:
-        """Detects the desired planning quality level from the goal and context."""
+        """Detects the desired planning quality level from the goal and context with smart analysis."""
         goal_lower = goal.lower()
         
         # Check for explicit quality keywords in the goal
@@ -129,13 +129,54 @@ class PlannerAgent(BaseAgent):
             logger.info("Detected PRODUCTION planning quality level from goal keywords")
             return PlanningQuality.PRODUCTION
         
-        # Check context for quality preferences
-        if hasattr(context, 'planning_quality_preference'):
-            return context.planning_quality_preference
+        # Smart complexity analysis
+        complexity_score = self._analyze_goal_complexity(goal, context)
+        
+        if complexity_score <= 2:
+            logger.info(f"Auto-detected FAST planning (complexity: {complexity_score}) - Simple goal")
+            return PlanningQuality.FAST
+        elif complexity_score <= 5:
+            logger.info(f"Auto-detected DECENT planning (complexity: {complexity_score}) - Moderate goal")
+            return PlanningQuality.DECENT
+        else:
+            logger.info(f"Auto-detected PRODUCTION planning (complexity: {complexity_score}) - Complex goal")
+            return PlanningQuality.PRODUCTION
+    
+    def _analyze_goal_complexity(self, goal: str, context: GlobalContext) -> int:
+        """
+        Analyzes goal complexity to determine appropriate planning quality.
+        Returns complexity score: 1-3 = FAST, 4-6 = DECENT, 7+ = PRODUCTION
+        """
+        score = 0
+        goal_lower = goal.lower()
+        
+        # Length complexity (longer goals are often more complex)
+        if len(goal) > 100:
+            score += 1
+        if len(goal) > 300:
+            score += 1
             
-        # Default to FAST for speed optimization
-        logger.info("Using default FAST planning quality level")
-        return self.default_quality
+        # Technical complexity indicators
+        technical_terms = ['api', 'database', 'authentication', 'security', 'deploy', 'test', 'integration', 'architecture']
+        score += sum(1 for term in technical_terms if term in goal_lower)
+        
+        # Multi-step indicators
+        multi_step_words = ['and', 'then', 'also', 'additionally', 'furthermore', 'moreover']
+        score += min(2, sum(1 for word in multi_step_words if word in goal_lower))
+        
+        # High complexity indicators
+        complex_indicators = ['microservice', 'distributed', 'scalable', 'enterprise', 'cloud', 'kubernetes']
+        score += sum(2 for indicator in complex_indicators if indicator in goal_lower)
+        
+        # Context complexity (existing files suggest ongoing project)
+        existing_files = context.workspace.list_files() if context.workspace else []
+        if len(existing_files) > 5:
+            score += 1
+        if len(existing_files) > 20:
+            score += 1
+            
+        logger.debug(f"Goal complexity analysis: '{goal[:50]}...' scored {score}")
+        return max(1, score)  # Minimum score of 1
 
     def _build_prompt(self, goal: str, context_summary: Dict[str, Any], quality: PlanningQuality = None) -> str:
         """Constructs a detailed, high-quality prompt to guide the LLM."""

@@ -1,6 +1,8 @@
 # agents/base.py
 import logging
+import concurrent.futures
 from abc import ABC, abstractmethod
+from typing import List, Callable, Any
 
 # The base agent needs to know the "shape" of the data it will receive and return.
 # By importing these types, we can use them in method signatures for clarity and
@@ -117,7 +119,7 @@ class BaseAgent(ABC):
 
     def handle_context_error(self, error: ContextTooLargeError, goal: str) -> AgentResponse:
         """
-        Common handler for context size errors across all agents.
+        Common handler for context size errors with smart retry logic.
         
         Args:
             error: The ContextTooLargeError that was caught
@@ -126,6 +128,20 @@ class BaseAgent(ABC):
         Returns:
             AgentResponse with failure and detailed error information
         """
+        logger.warning(f"{self.name} hit context size limit, attempting smart recovery")
+        
+        # Try to recover with truncated goal
+        if len(goal) > 500:
+            truncated_goal = goal[:400] + "... [Goal truncated due to context limits]"
+            logger.info(f"{self.name} retrying with truncated goal")
+            
+            try:
+                # Attempt retry with truncated context (subclasses can override this)
+                return self._retry_with_truncated_context(truncated_goal)
+            except Exception as retry_error:
+                logger.error(f"{self.name} retry failed: {retry_error}")
+        
+        # If retry fails or goal is already short, return helpful error
         error_message = f"""
 {self.name} failed due to context size limits.
 
@@ -133,12 +149,97 @@ Goal: {goal[:200]}{'...' if len(goal) > 200 else ''}
 
 {str(error)}
 
-The agent cannot proceed with this task due to context size constraints.
-Consider breaking down the task into smaller parts or reducing the scope.
+The agent attempted smart recovery but cannot proceed with this task.
+Consider breaking down the task into smaller, more focused parts.
 """
         
         logger.error(f"{self.name} context size error: {str(error)}")
         return AgentResponse(success=False, message=error_message.strip())
+    
+    def _retry_with_truncated_context(self, truncated_goal: str) -> AgentResponse:
+        """
+        Default implementation for retrying with truncated context.
+        Subclasses should override this for agent-specific retry logic.
+        """
+        logger.info(f"{self.name} using default truncated context retry")
+        # Most agents can't easily retry, so we return a helpful message
+        return AgentResponse(
+            success=False, 
+            message=f"{self.name} needs manual intervention to handle this large context. Please break down the goal into smaller tasks."
+        )
+    
+    def _execute_parallel_tasks(self, tasks: List[Callable[[], Any]], max_workers: int = 3, 
+                               task_descriptions: List[str] = None) -> List[Any]:
+        """
+        Utility method for agents to execute independent tasks in parallel.
+        Only use when tasks are truly independent and parallel execution provides benefit.
+        
+        Args:
+            tasks: List of callable functions that return results
+            max_workers: Maximum number of parallel workers
+            task_descriptions: Optional descriptions for progress tracking
+            
+        Returns:
+            List of results in the same order as input tasks
+        """
+        if len(tasks) <= 1:
+            # No benefit in parallelization for single task
+            return [task() for task in tasks]
+        
+        logger.info(f"{self.name} executing {len(tasks)} independent tasks in parallel")
+        
+        if task_descriptions:
+            for i, desc in enumerate(task_descriptions[:len(tasks)]):
+                self.report_progress(f"Parallel task {i+1}", desc)
+        
+        results = []
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+            # Submit all tasks
+            future_to_index = {executor.submit(task): i for i, task in enumerate(tasks)}
+            
+            # Collect results in original order
+            results = [None] * len(tasks)
+            for future in concurrent.futures.as_completed(future_to_index):
+                index = future_to_index[future]
+                try:
+                    results[index] = future.result()
+                except Exception as e:
+                    logger.error(f"{self.name} parallel task {index} failed: {e}")
+                    results[index] = None
+        
+        successful_tasks = sum(1 for r in results if r is not None)
+        logger.info(f"{self.name} completed {successful_tasks}/{len(tasks)} parallel tasks successfully")
+        
+        return results
+    
+    def _should_parallelize(self, task_count: int, estimated_time_per_task: float = 1.0) -> bool:
+        """
+        Determines if parallelization would provide meaningful benefit.
+        
+        Args:
+            task_count: Number of independent tasks
+            estimated_time_per_task: Estimated time per task in seconds
+            
+        Returns:
+            True if parallelization is recommended
+        """
+        # Only parallelize if:
+        # 1. More than 1 task
+        # 2. Each task takes reasonable time (>30 seconds or multiple tasks >10 seconds each)
+        # 3. Tasks are truly independent
+        
+        if task_count <= 1:
+            return False
+            
+        total_estimated_time = task_count * estimated_time_per_task
+        
+        # Parallelize if total work > 30 seconds or if we have 3+ tasks taking >10s each
+        if total_estimated_time > 30 or (task_count >= 3 and estimated_time_per_task > 10):
+            logger.info(f"{self.name} recommends parallelization: {task_count} tasks, ~{total_estimated_time:.1f}s total")
+            return True
+        
+        logger.debug(f"{self.name} keeping sequential: {task_count} tasks, ~{total_estimated_time:.1f}s total")
+        return False
 
 
 # --- Self-Testing Block ---

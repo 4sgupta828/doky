@@ -40,9 +40,14 @@ class AdaptiveEngine:
         logger.critical(f"--- ADAPTIVE ENGINE TRIGGERED for failed task: {failed_task.task_id} ---")
         context.log_event("adaptive_engine_triggered", {"failed_task_id": failed_task.task_id})
 
-        # --- Step 1: Analyze the failure ---
+        # --- Step 1: Analyze the failure with pattern detection ---
         failure_reason = failed_task.result.message if failed_task.result else "Unknown error."
         logger.info(f"Analyzing failure in task '{failed_task.goal}'. Reason: {failure_reason}")
+        
+        # Smart failure analysis
+        failure_pattern = self._detect_failure_pattern(failed_task, failure_reason)
+        recovery_strategy = self._get_recovery_strategy(failure_pattern)
+        logger.info(f"Detected failure pattern: {failure_pattern}, strategy: {recovery_strategy}")
 
         # --- Step 2: Revert workspace to a clean state ---
         # This uses the Git-based manager to undo any file changes from the failed task.
@@ -54,13 +59,10 @@ class AdaptiveEngine:
             logger.error(f"Failed to revert workspace changes for task '{failed_task.task_id}'. This could affect recovery.", exc_info=True)
             # We can choose to continue, but it's risky. For now, we'll log and proceed.
 
-        # --- Step 3: Formulate a new goal for the planner ---
-        # The goal is highly specific: recover from this exact failure.
-        recovery_goal = (
-            f"The original plan failed at task '{failed_task.task_id}' (goal: '{failed_task.goal}') "
-            f"with the error: '{failure_reason}'. "
-            f"Please generate a new, short sub-plan to debug and resolve this specific issue. "
-            f"The new plan should then resume the original mission objective."
+        # --- Step 3: Formulate a smart recovery goal ---
+        # Use pattern-specific recovery strategy
+        recovery_goal = self._build_smart_recovery_goal(
+            failed_task, failure_reason, failure_pattern, recovery_strategy
         )
         logger.info("Formulated new recovery goal for the PlannerAgent.")
 
@@ -122,6 +124,83 @@ class AdaptiveEngine:
                 logger.warning(f"Pruning task '{task.task_id}' as it was part of a failed branch.")
         
         logging.info(f"Pruned {len(tasks_to_prune)} obsolete tasks from the plan.")
+
+    def _detect_failure_pattern(self, failed_task: TaskNode, failure_reason: str) -> str:
+        """
+        Detects common failure patterns to enable smarter recovery strategies.
+        """
+        reason_lower = failure_reason.lower()
+        
+        # LLM/API related failures
+        if any(term in reason_lower for term in ['api key', 'authentication', 'rate limit', 'quota']):
+            return "api_auth_error"
+        if any(term in reason_lower for term in ['context too large', 'token limit', 'input too long']):
+            return "context_limit_error"
+        if any(term in reason_lower for term in ['timeout', 'connection', 'network']):
+            return "network_error"
+            
+        # Code/compilation failures
+        if any(term in reason_lower for term in ['syntax error', 'invalid syntax', 'parsing error']):
+            return "syntax_error"
+        if any(term in reason_lower for term in ['import error', 'module not found', 'no module']):
+            return "dependency_error"
+        if any(term in reason_lower for term in ['file not found', 'no such file', 'path does not exist']):
+            return "file_missing_error"
+            
+        # Test failures
+        if any(term in reason_lower for term in ['test failed', 'assertion error', 'expected']):
+            return "test_failure"
+            
+        # Generic LLM issues
+        if any(term in reason_lower for term in ['json', 'parse', 'invalid response']):
+            return "llm_response_error"
+            
+        return "unknown_error"
+    
+    def _get_recovery_strategy(self, failure_pattern: str) -> str:
+        """
+        Returns the best recovery strategy for a given failure pattern.
+        """
+        strategies = {
+            "api_auth_error": "check_credentials",
+            "context_limit_error": "break_down_task", 
+            "network_error": "retry_with_backoff",
+            "syntax_error": "targeted_debugging",
+            "dependency_error": "install_dependencies",
+            "file_missing_error": "regenerate_files",
+            "test_failure": "debug_and_fix",
+            "llm_response_error": "simplify_prompt",
+            "unknown_error": "general_debugging"
+        }
+        return strategies.get(failure_pattern, "general_debugging")
+    
+    def _build_smart_recovery_goal(
+        self, failed_task: TaskNode, failure_reason: str, 
+        failure_pattern: str, recovery_strategy: str
+    ) -> str:
+        """
+        Builds a targeted recovery goal based on the failure pattern.
+        """
+        base_context = (
+            f"Task '{failed_task.task_id}' (goal: '{failed_task.goal[:100]}...') failed with: '{failure_reason}'. "
+            f"Failure pattern detected: {failure_pattern}. "
+        )
+        
+        strategy_goals = {
+            "check_credentials": base_context + "Check API credentials and authentication setup. Verify environment variables and API keys.",
+            "break_down_task": base_context + "Break this task into smaller, more focused subtasks to avoid context limits.",
+            "retry_with_backoff": base_context + "Implement retry logic with exponential backoff for network issues.",
+            "targeted_debugging": base_context + "Focus on syntax analysis and code validation. Check for basic syntax errors.",
+            "install_dependencies": base_context + "Check and install missing dependencies. Verify imports and module availability.",
+            "regenerate_files": base_context + "Identify missing files and regenerate them. Check file paths and directory structure.",
+            "debug_and_fix": base_context + "Analyze test failures and implement targeted fixes. Focus on failed assertions.",
+            "simplify_prompt": base_context + "Simplify the prompt and try alternative approaches. Reduce complexity.",
+            "general_debugging": base_context + "Perform comprehensive debugging analysis. Identify root cause and implement fix."
+        }
+        
+        return strategy_goals.get(recovery_strategy, 
+            base_context + "Please generate a new plan to debug and resolve this issue."
+        )
 
 # --- Self-Testing Block ---
 # To run this test: `python core/adaptive_engine.py`
