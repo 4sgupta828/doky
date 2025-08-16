@@ -1,8 +1,6 @@
 # agents/tooling.py
-import json
 import logging
 import subprocess
-from typing import List
 
 # Foundational dependencies
 from .base import BaseAgent
@@ -30,22 +28,36 @@ class ToolingAgent(BaseAgent):
     def _is_command_safe(self, command: str) -> bool:
         """A simple safety check to prevent destructive commands."""
         if not command.strip():
+            logger.error("Empty command blocked for safety.")
             return False
         first_word = command.strip().split()[0]
         if first_word in self.disallowed_commands:
             logger.error(f"Execution of disallowed command '{first_word}' was blocked.")
             return False
+        # Log successful safety validation for transparency
+        logger.debug(f"Command '{first_word}' passed safety validation.")
         return True
 
     def execute(self, goal: str, context: GlobalContext, current_task: TaskNode) -> AgentResponse:
         # For this agent, the goal *is* the command to execute.
         command_to_run = goal
         logger.info(f"ToolingAgent executing command: '{command_to_run}'")
+        
+        # Report meaningful progress to user
+        self.report_progress("Analyzing command", f"Preparing to execute: '{command_to_run[:60]}...'")
+        
+        # Report thinking about safety validation
+        self.report_thinking(f"Validating command safety: checking if '{command_to_run.split()[0] if command_to_run.strip() else 'empty'}' is allowed and secure to execute.")
 
         if not self._is_command_safe(command_to_run):
+            self.report_progress("Command blocked", f"Safety check failed for command: {command_to_run.split()[0] if command_to_run.strip() else 'empty'}")
             return AgentResponse(success=False, message=f"Command '{command_to_run}' is disallowed for safety reasons.")
 
         try:
+            # Report execution start with transparency about environment
+            self.report_progress("Executing command", f"Running in workspace: {str(context.workspace.repo_path)}")
+            self.report_thinking(f"Command will execute with 120-second timeout in directory: {str(context.workspace.repo_path)}")
+            
             # The command is executed within the context of the agent's workspace.
             result = subprocess.run(
                 command_to_run,
@@ -56,18 +68,31 @@ class ToolingAgent(BaseAgent):
                 timeout=120  # A timeout is a crucial safety feature.
             )
 
+            # Report command completion status
+            self.report_progress("Command completed", f"Exit code: {result.returncode}, stdout: {len(result.stdout)} chars, stderr: {len(result.stderr)} chars")
+            
             # Create an artifact with the combined output for easier debugging.
             output_content = f"--- STDOUT ---\n{result.stdout}\n\n--- STDERR ---\n{result.stderr}"
             output_artifact_key = f"{current_task.task_id}_output.txt"
             context.add_artifact(output_artifact_key, output_content, current_task.task_id)
+            
+            # Report intermediate output for transparency
+            if result.stdout.strip():
+                self.report_intermediate_output("command_stdout", result.stdout.strip()[:1000])  # Truncate for display
+            if result.stderr.strip():
+                self.report_intermediate_output("command_stderr", result.stderr.strip()[:1000])  # Truncate for display
 
             if result.returncode != 0:
                 msg = f"Command failed with exit code {result.returncode}."
                 logger.error(f"{msg}\n{output_content}")
+                self.report_thinking(f"Command failed with exit code {result.returncode}. This indicates an error during execution. Output has been captured for analysis.")
                 return AgentResponse(success=False, message=msg, artifacts_generated=[output_artifact_key])
 
             # Special handling for pytest JSON reports
             if "pytest" in command_to_run and "--json-report" in command_to_run:
+                self.report_progress("Processing pytest output", "Extracting JSON test report for downstream analysis")
+                self.report_thinking("Detected pytest JSON report command. Will extract and save the JSON report for TestRunnerAgent analysis.")
+                
                 try:
                     # Assume the report is saved to a known file, then read it.
                     report_path = context.workspace.repo_path / ".report.json"
@@ -77,18 +102,25 @@ class ToolingAgent(BaseAgent):
                             pytest_json_report_str = f.read()
                         context.add_artifact("pytest_output.json", pytest_json_report_str, current_task.task_id)
                         logger.info("Successfully captured pytest JSON report artifact.")
+                        self.report_progress("JSON report captured", f"Saved pytest report artifact ({len(pytest_json_report_str)} chars)")
+                    else:
+                        self.report_thinking("Expected pytest JSON report file not found. This may indicate the pytest command didn't generate the expected output.")
                 except Exception as e:
                     logger.warning(f"Could not process pytest JSON report file: {e}")
+                    self.report_thinking(f"Failed to process pytest JSON report: {e}. Raw command output is still available for analysis.")
 
+            self.report_progress("Command successful", f"Execution completed successfully with exit code 0")
             return AgentResponse(success=True, message="Command executed successfully.", artifacts_generated=[output_artifact_key])
 
         except subprocess.TimeoutExpired:
             msg = f"Command '{command_to_run}' timed out after 120 seconds."
             logger.error(msg)
+            self.report_thinking(f"Command exceeded 120-second timeout limit. This suggests the command is either hanging, processing very large datasets, or encountering an infinite loop.")
             return AgentResponse(success=False, message=msg)
         except Exception as e:
             error_msg = f"An unexpected error occurred while running command: {e}"
             logger.critical(error_msg, exc_info=True)
+            self.report_thinking(f"Unexpected error during command execution: {e}. This indicates a system-level issue that needs investigation.")
             return AgentResponse(success=False, message=error_msg)
 
 

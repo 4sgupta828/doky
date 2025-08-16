@@ -30,19 +30,26 @@ class TestRunnerAgent(BaseAgent):
     def execute(self, goal: str, context: GlobalContext, current_task: TaskNode) -> AgentResponse:
         logger.info(f"TestRunnerAgent executing with goal: '{goal}'")
         
+        # Report meaningful progress to user
+        self.report_progress("Starting test execution", f"Analyzing goal: '{goal[:80]}...'")
+        
         # Check if we have an existing test report artifact first
         test_report_key = current_task.input_artifact_keys[0] if current_task.input_artifact_keys else "pytest_output.json"
         test_results_str = context.get_artifact(test_report_key)
         
         if test_results_str:
             # We have an existing report, interpret it
+            self.report_progress("Found existing test report", f"Interpreting report from {test_report_key}")
             return self._interpret_test_report(test_results_str, context, current_task)
         else:
             # No existing report, run tests ourselves
+            self.report_progress("No existing report found", "Will discover and run tests independently")
             return self._run_tests_independently(context, current_task)
 
     def _interpret_test_report(self, test_results_str: str, context: GlobalContext, current_task: TaskNode) -> AgentResponse:
         """Interpret an existing pytest JSON report."""
+        self.report_progress("Parsing test report", "Analyzing JSON test results")
+        
         try:
             # Pytest can output a detailed JSON report. We parse it here.
             results = json.loads(test_results_str)
@@ -53,8 +60,13 @@ class TestRunnerAgent(BaseAgent):
             if failed_tests > 0:
                 msg = f"Test suite failed. {failed_tests} out of {total_tests} tests failed."
                 logger.error(msg)
+                
+                # Report key decision: test failures detected
+                self.report_thinking(f"Detected {failed_tests} test failures out of {total_tests} total tests. Need to create detailed context for debugging analysis.")
+                
                 # Save the detailed report for the DebuggingAgent to analyze
                 context.add_artifact("failed_test_report.json", results, current_task.task_id)
+                self.report_progress("Created failure artifacts", f"Saved failed test report with {failed_tests} failures")
                 
                 # Hand over to DebuggingAgent if available
                 self._handover_to_debugging_agent(context, current_task, msg)
@@ -63,14 +75,18 @@ class TestRunnerAgent(BaseAgent):
             else:
                 msg = f"Test suite passed. All {total_tests} tests were successful."
                 logger.info(msg)
+                self.report_progress("All tests passed", f"Successfully validated {total_tests} tests")
                 return AgentResponse(success=True, message=msg)
 
         except (json.JSONDecodeError, KeyError) as e:
             msg = f"Failed to parse pytest JSON report. The test command may have failed or produced malformed output. Error: {e}. Report content: {test_results_str[:500]}"
             logger.error(msg)
             
+            self.report_thinking(f"Test report parsing failed - this suggests a fundamental issue with test execution or output format. Need debugging analysis.")
+            
             # Create basic failure context for debugging agent
             context.add_artifact("failed_test_report.json", {"error": "json_parse_failure", "details": str(e), "raw_output": test_results_str}, current_task.task_id)
+            self.report_progress("Created parsing error artifacts", "Saved parsing failure context for debugging")
             
             # Hand over to DebuggingAgent if available
             self._handover_to_debugging_agent(context, current_task, msg)
@@ -80,6 +96,8 @@ class TestRunnerAgent(BaseAgent):
     def _run_tests_independently(self, context: GlobalContext, current_task: TaskNode) -> AgentResponse:
         """Run tests independently by discovering test files in the workspace."""
         workspace_path = Path(context.workspace_path)
+        
+        self.report_progress("Setting up test environment", f"Configuring environment in {workspace_path}")
         
         # Ensure test environment is set up
         env_setup_result = self._setup_test_environment(workspace_path)
@@ -126,16 +144,20 @@ class TestRunnerAgent(BaseAgent):
             return AgentResponse(success=False, message=env_setup_result["message"])
         
         # Look for tests in the workspace
+        self.report_progress("Discovering test files", f"Searching for test files in {workspace_path}")
         test_files = self._discover_test_files(workspace_path)
         
         if not test_files:
             msg = "No test files found in the workspace."
             logger.warning(msg)
+            self.report_thinking("No test files discovered. This might be expected if no tests exist yet, or could indicate an issue with test file naming conventions.")
             return AgentResponse(success=True, message=msg)
         
         logger.info(f"Found {len(test_files)} test files to run")
+        self.report_progress(f"Found {len(test_files)} test files", f"Discovered: {', '.join([f.name for f in test_files[:5]])}{'...' if len(test_files) > 5 else ''}")
         
         # Try pytest first if available
+        self.report_progress("Executing tests", "Running tests with pytest (preferred) or fallback methods")
         results = self._run_with_pytest(workspace_path, test_files)
         if results is None:
             # Fallback to running individual test files
@@ -164,6 +186,8 @@ class TestRunnerAgent(BaseAgent):
             msg = f"Test suite failed. {total_failed} out of {total_test_functions} tests failed across {failed_files} files."
             logger.error(msg)
             
+            self.report_thinking(f"Test execution completed with failures: {total_failed} failed tests across {failed_files} files. Creating detailed context for debugging.")
+            
             # Hand over to DebuggingAgent if available
             self._handover_to_debugging_agent(context, current_task, msg)
                 
@@ -171,6 +195,7 @@ class TestRunnerAgent(BaseAgent):
         else:
             msg = f"Test suite passed. All {total_test_functions} tests passed across {len(test_files)} files."
             logger.info(msg)
+            self.report_progress("All tests successful", f"Executed {total_test_functions} tests across {len(test_files)} files successfully")
             return AgentResponse(success=True, message=msg, artifacts_generated=["test_execution_report.json"])
     
     def _discover_test_files(self, workspace_path: Path) -> list:
@@ -383,6 +408,8 @@ class TestRunnerAgent(BaseAgent):
     
     def _setup_test_environment(self, workspace_path: Path) -> dict:
         """Set up the test environment by ensuring required dependencies are installed."""
+        self.report_thinking("Checking test environment setup - ensuring virtual environment and dependencies are properly configured.")
+        
         try:
             # Check if we're in a virtual environment
             venv_path = workspace_path / "test_env"
@@ -391,6 +418,7 @@ class TestRunnerAgent(BaseAgent):
             # If no virtual environment exists, create one
             if not venv_path.exists():
                 logger.info("Creating virtual environment for testing...")
+                self.report_progress("Creating virtual environment", f"Setting up isolated Python environment at {venv_path}")
                 result = subprocess.run([sys.executable, "-m", "venv", str(venv_path)], 
                                       capture_output=True, text=True, cwd=workspace_path)
                 if result.returncode != 0:
@@ -409,6 +437,7 @@ class TestRunnerAgent(BaseAgent):
                                   capture_output=True, text=True)
             if result.returncode != 0:
                 logger.info("Installing pytest in virtual environment...")
+                self.report_progress("Installing pytest", "Adding pytest testing framework to virtual environment")
                 result = subprocess.run([str(pip_exe), "install", "pytest"], 
                                       capture_output=True, text=True)
                 if result.returncode != 0:
@@ -417,6 +446,7 @@ class TestRunnerAgent(BaseAgent):
             # Install requirements if available
             if requirements_path.exists():
                 logger.info("Installing requirements in virtual environment...")
+                self.report_progress("Installing dependencies", f"Installing project requirements from {requirements_path.name}")
                 result = subprocess.run([str(pip_exe), "install", "-r", str(requirements_path)], 
                                       capture_output=True, text=True)
                 if result.returncode != 0:

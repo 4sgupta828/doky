@@ -78,28 +78,41 @@ class DebuggingAgent(BaseAgent):
         """Main debugging orchestration method implementing the 4-phase approach."""
         logger.info(f"DebuggingAgent executing with goal: '{goal}' - Starting comprehensive debugging process")
         
+        # Report initial analysis and strategy to user
+        self.report_progress("Initializing debug process", f"Analyzing: '{goal[:80]}...'")
+        self.report_thinking(f"Starting comprehensive 4-phase debugging approach: Evidence → Analysis → Fix → Validation. Max {self.max_debug_iterations} iterations allowed.")
+        
         for iteration in range(self.max_debug_iterations):
             logger.info(f"--- Debugging Iteration {iteration + 1}/{self.max_debug_iterations} ---")
+            self.report_progress(f"Debug iteration {iteration + 1}/{self.max_debug_iterations}", "Running comprehensive debugging cycle")
             
             try:
                 # Phase 1: Evidence Gathering
                 logger.info("Phase 1: Gathering comprehensive evidence...")
+                self.report_progress("Phase 1: Evidence gathering", "Collecting system context, logs, and failure data")
                 evidence = self._gather_evidence(context, current_task)
                 
                 # Phase 2: Root Cause Analysis & Hypothesis Generation
                 logger.info("Phase 2: Analyzing root cause and generating hypotheses...")
+                self.report_progress("Phase 2: Root cause analysis", "Analyzing evidence and generating fix hypotheses")
                 hypothesis = self._analyze_and_hypothesize(evidence, context, current_task)
                 
                 # Phase 3: Smart Fix Strategy Decision
                 logger.info("Phase 3: Determining fix strategy...")
+                self.report_progress("Phase 3: Fix strategy execution", f"Applying {hypothesis.get('solution_type', 'unknown')} fix strategy")
                 fix_result = self._execute_fix_strategy(hypothesis, context, current_task)
                 
                 # Phase 4: Validation
                 logger.info("Phase 4: Validating the fix...")
+                self.report_progress("Phase 4: Fix validation", "Testing fix effectiveness with comprehensive validation")
                 validation_result = self._validate_fix(context, current_task)
                 
                 if validation_result["success"]:
                     logger.info(f"✅ Debugging succeeded after {iteration + 1} iterations")
+                    self.report_progress("Debugging successful!", f"Issue resolved after {iteration + 1} iterations using {hypothesis.get('solution_type', 'unknown')} approach")
+                    
+                    # Report final success analysis
+                    self.report_thinking(f"Success! Applied {hypothesis.get('solution_type', 'unknown')} fix strategy. Validation confirmed the issue is resolved. Total iterations: {iteration + 1}.")
                     
                     # Display transparency summary for user
                     context.print_communication_summary()
@@ -111,18 +124,26 @@ class DebuggingAgent(BaseAgent):
                     )
                 else:
                     logger.warning(f"❌ Fix attempt {iteration + 1} failed: {validation_result['message']}")
+                    self.report_progress(f"Iteration {iteration + 1} failed", f"Fix validation failed: {validation_result.get('message', 'Unknown error')[:60]}...")
+                    self.report_thinking(f"Iteration {iteration + 1} unsuccessful. Validation failed: {validation_result.get('message', 'Unknown')}. {'Will retry with refined approach.' if iteration + 1 < self.max_debug_iterations else 'Max iterations reached.'}")
+                    
                     # Store failure info for next iteration
                     context.add_artifact(f"debug_iteration_{iteration}_failure.json", 
                                        json.dumps(validation_result), current_task.task_id)
                     
             except Exception as e:
                 logger.error(f"Debugging iteration {iteration + 1} failed with exception: {e}")
+                self.report_progress(f"Iteration {iteration + 1} exception", f"Unexpected error: {str(e)[:60]}...")
+                self.report_thinking(f"Iteration {iteration + 1} encountered unexpected error: {e}. {'Will attempt next iteration.' if iteration + 1 < self.max_debug_iterations else 'Max iterations reached - debugging failed.'}")
                 if iteration == self.max_debug_iterations - 1:
                     # Last iteration failed
                     break
                 continue
         
         # All iterations failed - still show transparency summary
+        self.report_progress("Debugging failed", f"Unable to resolve after {self.max_debug_iterations} iterations")
+        self.report_thinking(f"Exhausted all {self.max_debug_iterations} debugging attempts. Issue requires manual intervention or different approach. All failure contexts have been documented for analysis.")
+        
         context.print_communication_summary()
         
         return AgentResponse(
@@ -133,6 +154,8 @@ class DebuggingAgent(BaseAgent):
 
     def _gather_evidence(self, context: GlobalContext, current_task: TaskNode) -> Dict[str, Any]:
         """Phase 1: Comprehensive evidence gathering using ToolingAgent and direct analysis."""
+        self.report_thinking("Starting evidence gathering phase. Will collect failure reports, system context, code context, and environment data for comprehensive analysis.")
+        
         evidence = {
             "initial_failure": {},
             "system_context": {},
@@ -146,11 +169,17 @@ class DebuggingAgent(BaseAgent):
             failed_report = context.get_artifact("failed_test_report.json")
             if failed_report:
                 evidence["initial_failure"] = json.loads(failed_report) if isinstance(failed_report, str) else failed_report
+                self.report_progress("Failure report analyzed", f"Found test failure data: {evidence['initial_failure'].get('summary', {}).get('failed', 'unknown')} failed tests")
+            else:
+                self.report_thinking("No failed test report found. Will proceed with available evidence.")
             
             # Get code context
             code_context = context.get_artifact("targeted_code_context.txt")
             if code_context:
                 evidence["code_context"]["targeted_code"] = code_context
+                self.report_progress("Code context loaded", f"Loaded {len(str(code_context))} chars of relevant code context")
+            else:
+                self.report_thinking("No targeted code context found. Analysis will be based on available artifacts.")
             
             # Use ToolingAgent if available for deeper evidence gathering
             if "ToolingAgent" in self.agent_registry:
@@ -175,6 +204,8 @@ class DebuggingAgent(BaseAgent):
                                          f"Successfully gathered evidence: {len(tooling_result.artifacts_generated or [])} artifacts",
                                          {"artifacts": tooling_result.artifacts_generated or [], "success": True},
                                          current_task.task_id)
+                    self.report_progress("Tooling evidence gathered", f"ToolingAgent provided {len(tooling_result.artifacts_generated or [])} environment artifacts")
+                    
                     # Extract additional evidence from tooling agent results
                     for artifact_key in tooling_result.artifacts_generated or []:
                         artifact_content = context.get_artifact(artifact_key)
@@ -197,7 +228,18 @@ class DebuggingAgent(BaseAgent):
                     "working_directory": context.workspace_path
                 }
                 
+            # Report comprehensive evidence summary
+            evidence_summary = {
+                "failure_data": bool(evidence["initial_failure"]),
+                "code_context": bool(evidence["code_context"]),
+                "env_artifacts": len(evidence["environment_context"]),
+                "system_info": bool(evidence["system_context"])
+            }
+            
             logger.info(f"Evidence gathered: {len(evidence)} categories")
+            self.report_progress("Evidence collection complete", f"Gathered: failure={evidence_summary['failure_data']}, code={evidence_summary['code_context']}, env={evidence_summary['env_artifacts']} artifacts")
+            self.report_intermediate_output("evidence_summary", evidence_summary)
+            
             return evidence
             
         except Exception as e:
@@ -206,6 +248,8 @@ class DebuggingAgent(BaseAgent):
 
     def _analyze_and_hypothesize(self, evidence: Dict[str, Any], context: GlobalContext, current_task: TaskNode) -> Dict[str, Any]:
         """Phase 2: Root cause analysis and hypothesis generation using LLM."""
+        self.report_thinking("Starting root cause analysis using AI reasoning. Will analyze all evidence to generate hypotheses and determine optimal fix strategy.")
+        
         try:
             # Build comprehensive analysis prompt
             analysis_prompt = f"""
@@ -231,6 +275,8 @@ class DebuggingAgent(BaseAgent):
             Focus on actionable insights and be specific about the fix strategy.
             """
             
+            self.report_progress("AI analysis in progress", "Processing evidence with AI reasoning for root cause analysis")
+            
             response = self.llm_client.invoke(analysis_prompt)
             hypothesis = json.loads(response)
             
@@ -240,10 +286,26 @@ class DebuggingAgent(BaseAgent):
             logger.info(f"Generated hypothesis: {hypothesis.get('primary_hypothesis', 'Unknown')}")
             logger.info(f"Solution type: {hypothesis.get('solution_type', 'Unknown')}")
             
+            # Report detailed hypothesis analysis
+            self.report_progress("Hypothesis generated", f"Root cause: {hypothesis.get('primary_hypothesis', 'Unknown')[:60]}...")
+            self.report_thinking(f"Analysis complete. Primary hypothesis: '{hypothesis.get('primary_hypothesis', 'Unknown')}'. Confidence: {hypothesis.get('confidence_level', 'unknown')}. Recommended strategy: {hypothesis.get('solution_type', 'unknown')}.")
+            
+            # Show intermediate analysis results
+            analysis_summary = {
+                "hypothesis": hypothesis.get('primary_hypothesis', 'Unknown')[:100],
+                "confidence": hypothesis.get('confidence_level', 'unknown'),
+                "solution_type": hypothesis.get('solution_type', 'unknown'),
+                "complexity": hypothesis.get('complexity_assessment', 'unknown')
+            }
+            self.report_intermediate_output("hypothesis_analysis", analysis_summary)
+            
             return hypothesis
             
         except Exception as e:
             logger.error(f"Hypothesis generation failed: {e}")
+            self.report_thinking(f"AI analysis failed with error: {e}. Falling back to basic hypothesis for manual investigation.")
+            self.report_progress("Analysis fallback", "AI analysis failed, using basic hypothesis for manual debugging")
+            
             # Fallback basic hypothesis
             return {
                 "root_cause_analysis": f"Analysis failed due to: {e}",
@@ -257,10 +319,13 @@ class DebuggingAgent(BaseAgent):
         """Phase 3: Execute the chosen fix strategy via appropriate agents."""
         solution_type = hypothesis.get("solution_type", "DESIGN_CHANGE")
         
+        self.report_thinking(f"Executing {solution_type} fix strategy. This will involve {'direct code changes via CodeAgent' if solution_type == 'SURGICAL' else 'specification-driven approach via SpecAgent + CodeAgent'}.")
+        
         try:
             if solution_type == "SURGICAL" and "CodeGenerationAgent" in self.agent_registry:
                 # Direct surgical fix via CodeGenerationAgent
                 logger.info("Executing surgical fix via CodeGenerationAgent")
+                self.report_progress("Surgical fix approach", "Applying direct code changes via CodeGenerationAgent")
                 
                 # Log the delegation for transparency
                 self.log_communication(context, "CodeGenerationAgent", "delegation", 
@@ -283,11 +348,19 @@ class DebuggingAgent(BaseAgent):
                                      result.message,
                                      {"success": result.success, "artifacts": result.artifacts_generated},
                                      current_task.task_id)
+                
+                # Report fix execution results
+                if result.success:
+                    self.report_progress("Surgical fix applied", f"CodeAgent successfully applied changes: {len(result.artifacts_generated or [])} files modified")
+                else:
+                    self.report_progress("Surgical fix failed", f"CodeAgent failed: {result.message[:60]}...")
+                    
                 return {"success": result.success, "artifacts_generated": result.artifacts_generated, "message": result.message}
                 
             elif solution_type == "DESIGN_CHANGE" and "SpecGenerationAgent" in self.agent_registry and "CodeGenerationAgent" in self.agent_registry:
                 # Complex fix requiring specification first
                 logger.info("Executing design change via SpecAgent -> CoderAgent")
+                self.report_progress("Design change approach", "Multi-step fix: SpecAgent → CodeAgent workflow")
                 
                 # Log the delegation to SpecAgent for transparency
                 self.log_communication(context, "SpecGenerationAgent", "delegation", 
@@ -315,6 +388,8 @@ class DebuggingAgent(BaseAgent):
                                      current_task.task_id)
                 
                 if spec_result.success:
+                    self.report_progress("Specification complete", f"SpecAgent created {len(spec_result.artifacts_generated or [])} specification artifacts")
+                    
                     # Log the delegation to CodeGenerationAgent for transparency
                     self.log_communication(context, "CodeGenerationAgent", "delegation", 
                                          "Implement the debugging fix specification",
@@ -336,13 +411,23 @@ class DebuggingAgent(BaseAgent):
                                          code_result.message,
                                          {"success": code_result.success, "artifacts": code_result.artifacts_generated},
                                          current_task.task_id)
+                    
+                    # Report implementation results
+                    if code_result.success:
+                        self.report_progress("Implementation complete", f"CodeAgent implemented spec: {len(code_result.artifacts_generated or [])} files created/modified")
+                    else:
+                        self.report_progress("Implementation failed", f"CodeAgent failed to implement: {code_result.message[:60]}...")
+                        
                     return {"success": code_result.success, "artifacts_generated": code_result.artifacts_generated, "message": code_result.message}
                 else:
+                    self.report_progress("Specification failed", f"SpecAgent failed: {spec_result.message[:60]}...")
                     return {"success": False, "message": f"Specification generation failed: {spec_result.message}"}
                     
             else:
                 # Fallback: create manual fix recommendations
                 logger.warning("Required agents not available, creating manual fix recommendations")
+                self.report_progress("Manual fix mode", "Required agents unavailable - generating manual fix recommendations")
+                self.report_thinking("Cannot execute automated fix because required agents (SpecAgent/CodeAgent) are not available. Creating detailed manual recommendations instead.")
                 
                 fix_recommendations = {
                     "hypothesis": hypothesis,
@@ -356,6 +441,7 @@ class DebuggingAgent(BaseAgent):
                 }
                 
                 context.add_artifact("manual_fix_recommendations.json", json.dumps(fix_recommendations, indent=2), current_task.task_id)
+                self.report_intermediate_output("manual_fix_recommendations", fix_recommendations)
                 return {"success": True, "artifacts_generated": ["manual_fix_recommendations.json"], "message": "Created manual fix recommendations"}
                 
         except Exception as e:
@@ -364,9 +450,12 @@ class DebuggingAgent(BaseAgent):
 
     def _validate_fix(self, context: GlobalContext, current_task: TaskNode) -> Dict[str, Any]:
         """Phase 4: Validate the fix using TestRunner and potentially TestGenerator."""
+        self.report_thinking("Starting fix validation phase. Will run tests to confirm the issue is resolved and no regressions were introduced.")
+        
         try:
             if "TestRunnerAgent" in self.agent_registry:
                 logger.info("Validating fix using TestRunnerAgent")
+                self.report_progress("Running validation tests", "TestRunnerAgent will verify fix effectiveness")
                 
                 # Log the delegation for transparency
                 self.log_communication(context, "TestRunnerAgent", "delegation", 
@@ -389,12 +478,21 @@ class DebuggingAgent(BaseAgent):
                                      {"success": result.success, "artifacts": result.artifacts_generated},
                                      current_task.task_id)
                 
+                # Report validation results with detail
                 if result.success:
+                    self.report_progress("Validation successful", "All tests passed - fix verified effective")
+                else:
+                    self.report_progress("Validation failed", f"Tests still failing: {result.message[:60]}...")
+                
+                if result.success:
+                    self.report_thinking("Fix validation successful! All tests are now passing, confirming the issue has been resolved without introducing regressions.")
                     return {"success": True, "message": "Fix validated successfully - tests now pass"}
                 else:
                     # Tests still failing, try to enhance test coverage if TestGenerator available
                     if "TestGeneratorAgent" in self.agent_registry:
                         logger.info("Tests still failing, enhancing test coverage")
+                        self.report_progress("Enhancing test coverage", "TestGeneratorAgent will create additional validation tests")
+                        self.report_thinking("Validation failed - tests are still failing. Will generate additional tests to better understand the issue scope and improve validation coverage.")
                         
                         # Log the delegation for transparency
                         self.log_communication(context, "TestGeneratorAgent", "delegation", 
@@ -416,14 +514,24 @@ class DebuggingAgent(BaseAgent):
                                              gen_result.message,
                                              {"success": gen_result.success, "artifacts": gen_result.artifacts_generated},
                                              current_task.task_id)
+                        
+                        # Report test generation results
+                        if gen_result.success:
+                            self.report_progress("Additional tests created", f"Generated {len(gen_result.artifacts_generated or [])} new test files for enhanced validation")
+                        else:
+                            self.report_progress("Test generation failed", f"Could not create additional tests: {gen_result.message[:60]}...")
                     
+                    self.report_thinking(f"Validation failed even after attempting to enhance test coverage. The fix may be incomplete or the issue more complex than initially analyzed. Message: {result.message}")
                     return {"success": False, "message": f"Validation failed: {result.message}"}
             else:
                 logger.warning("TestRunnerAgent not available for validation")
+                self.report_progress("Validation unavailable", "TestRunnerAgent not available - cannot verify fix")
+                self.report_thinking("Cannot perform automated validation because TestRunnerAgent is not available. Fix has been applied but effectiveness cannot be confirmed automatically.")
                 return {"success": False, "message": "Cannot validate - TestRunnerAgent not available"}
                 
         except Exception as e:
             logger.error(f"Fix validation failed: {e}")
+            self.report_thinking(f"Validation phase encountered unexpected error: {e}. This indicates a system issue during test execution.")
             return {"success": False, "message": f"Validation error: {e}"}
 
 

@@ -123,20 +123,25 @@ class TestGenerationAgent(BaseAgent):
         # Check for explicit quality keywords in the goal
         if any(keyword in goal_lower for keyword in ['fast', 'quick', 'basic', 'simple', 'minimal']):
             logger.info("Detected FAST test quality level from goal keywords")
+            self.report_thinking("Goal contains keywords suggesting FAST test quality - prioritizing speed over comprehensiveness.")
             return TestQuality.FAST
         elif any(keyword in goal_lower for keyword in ['decent', 'thorough', 'comprehensive', 'good', 'complete']):
             logger.info("Detected DECENT test quality level from goal keywords")
+            self.report_thinking("Goal contains keywords suggesting DECENT test quality - balanced approach with good coverage.")
             return TestQuality.DECENT
         elif any(keyword in goal_lower for keyword in ['production', 'exhaustive', 'full', 'robust', 'enterprise']):
             logger.info("Detected PRODUCTION test quality level from goal keywords")
+            self.report_thinking("Goal contains keywords suggesting PRODUCTION test quality - maximum coverage and robustness.")
             return TestQuality.PRODUCTION
         
         # Check context for quality preferences
         if hasattr(context, 'test_quality_preference'):
+            self.report_thinking(f"Using context preference: {context.test_quality_preference.value} test quality.")
             return context.test_quality_preference
             
         # Default to FAST for speed optimization
         logger.info("Using default FAST test quality level")
+        self.report_thinking("No explicit quality indicators found. Defaulting to FAST test quality for quick iteration.")
         return self.default_quality
 
     def _build_prompt(self, spec: str, code_to_test: Dict[str, str], test_type: Literal["unit", "integration"], quality: TestQuality = None) -> str:
@@ -186,10 +191,11 @@ class TestGenerationAgent(BaseAgent):
         logger.info(f"TestGenerationAgent executing with goal: '{goal}'")
         
         # Report meaningful progress
-        self.report_progress("Generating tests", f"Creating tests for: '{goal[:80]}...'")
+        self.report_progress("Analyzing requirements", f"Creating tests for: '{goal[:80]}...'")
         
         test_type = self._determine_test_type(goal)
         logger.info(f"Determined required test type: {test_type}")
+        self.report_thinking(f"Determined test type: {test_type} based on goal analysis. This will influence the test structure and approach.")
         
         if test_type != "unit":
             self.report_thinking(f"I'll create {test_type} tests - these will be more comprehensive than simple unit tests.")
@@ -202,16 +208,20 @@ class TestGenerationAgent(BaseAgent):
             spec = f"User Request: {goal}"
             files_to_read = []
             logger.info("No spec or manifest found. Will generate tests based on goal and existing code.")
+            self.report_thinking("No technical specification or manifest found. Will infer test requirements from the goal and discover code files automatically.")
         elif not spec:
             spec = f"User Request: {goal}"
             files_to_read = manifest.get("files_to_create", [])
             logger.info("No spec found. Using goal as specification for test generation.")
+            self.report_thinking("Found file manifest but no technical specification. Using goal as spec and manifest for code discovery.")
         elif not manifest:
             spec = spec
             files_to_read = []
             logger.info("No manifest found. Will infer files to test from workspace.")
+            self.report_thinking("Found technical specification but no manifest. Will discover code files in workspace automatically.")
         else:
             files_to_read = manifest.get("files_to_create", [])
+            self.report_thinking(f"Found both specification and manifest. Will test {len(files_to_read)} files listed in manifest.")
 
         code_to_test = {}
         # files_to_read is already set above based on manifest availability
@@ -224,16 +234,27 @@ class TestGenerationAgent(BaseAgent):
         # If no code was found from manifest, try to discover existing Python files
         if not code_to_test:
             logger.info("No code found from manifest. Attempting to discover existing Python files.")
+            self.report_progress("Discovering code files", "Scanning workspace for Python files to test")
+            self.report_thinking("No code files found from manifest. Initiating automatic code discovery by scanning workspace for Python files.")
+            
             try:
                 all_files = context.workspace.list_files(".")
+                discovered_files = []
                 for file_path in all_files:
                     if file_path.endswith(".py") and not file_path.startswith("tests/") and not file_path.startswith("test_"):
                         content = context.workspace.get_file_content(file_path)
                         if content:
                             code_to_test[file_path] = content
+                            discovered_files.append(file_path)
                             logger.info(f"Discovered code file for testing: {file_path}")
+                
+                if discovered_files:
+                    self.report_progress("Code discovery complete", f"Found {len(discovered_files)} Python files: {', '.join(discovered_files[:3])}{'...' if len(discovered_files) > 3 else ''}")
+                else:
+                    self.report_thinking("Code discovery found no Python files. This may be expected for a new project or indicate files are in unexpected locations.")
             except Exception as e:
                 logger.warning(f"Failed to discover code files: {e}")
+                self.report_thinking(f"Code discovery failed with error: {e}. Will proceed with available information.")
         
         if not code_to_test:
             return AgentResponse(success=True, message="No application code found to test.")
@@ -250,8 +271,12 @@ class TestGenerationAgent(BaseAgent):
             # Detect quality level from goal and context
             quality_level = self._detect_quality_level(goal, context)
             logger.info(f"Using test quality level: {quality_level.value.upper()}")
+            self.report_progress("Test quality determined", f"Using {quality_level.value.upper()} quality level for comprehensive {test_type} tests")
+            self.report_thinking(f"Selected {quality_level.value.upper()} quality level based on goal analysis. This will determine test depth, coverage, and sophistication.")
             
             prompt = self._build_prompt(spec, code_to_test, test_type, quality_level)
+            
+            self.report_progress("Generating test code", f"Creating {quality_level.value} {test_type} tests with AI assistance")
             
             # Use regular invoke by default, fall back to function calling if needed
             logger.debug("Using regular invoke method (primary approach)")
@@ -282,6 +307,10 @@ class TestGenerationAgent(BaseAgent):
         except Exception as e:
             return AgentResponse(success=False, message=f"An unexpected error occurred during test generation: {e}")
 
+        # Report successful test generation with details
+        total_lines = sum(len(content.split('\n')) for content in generated_tests_map.values())
+        self.report_progress("Test generation complete", f"Generated {len(generated_tests_map)} test files with {total_lines} total lines")
+        
         # Display the generated test code using enhanced UI
         if len(generated_tests_map) == 1:
             # Single test file - show as code snippet
@@ -293,9 +322,12 @@ class TestGenerationAgent(BaseAgent):
             self.report_intermediate_output("code_files", generated_tests_map)
 
         written_files = []
+        self.report_progress("Writing test files", f"Saving {len(generated_tests_map)} test files to workspace")
+        
         for file_path, code_content in generated_tests_map.items():
             context.workspace.write_file_content(file_path, code_content, current_task.task_id)
             written_files.append(file_path)
+            logger.info(f"Successfully wrote test file: {file_path} ({len(code_content.split('\n'))} lines)")
 
         return AgentResponse(
             success=True,
