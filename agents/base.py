@@ -114,6 +114,46 @@ class BaseAgent(ABC):
         """Helper method for agents to log inter-agent communications for transparency."""
         context.log_agent_communication(self.name, to_agent, message_type, content, context_data, task_id)
     
+    def call_agent_with_progress(self, target_agent, goal: str, context: 'GlobalContext', task: TaskNode, subtask_id: str = None, input_artifact_keys: list = None):
+        """
+        Helper method to call another agent while transferring progress tracker.
+        This ensures CLI progress reporting continues across agent handovers.
+        
+        Args:
+            target_agent: The agent instance to call
+            goal: The goal to pass to the target agent
+            context: The global context
+            task: The current task (will create subtask if needed)
+            subtask_id: Optional custom subtask ID
+            input_artifact_keys: Optional list of specific artifact keys to pass to target agent
+        
+        Returns:
+            AgentResponse from the target agent
+        """
+        # Create subtask if needed
+        if subtask_id is None:
+            subtask_id = f"{task.task_id}_{target_agent.name.lower()}"
+        
+        # Use provided artifact keys or fall back to original task's keys
+        artifact_keys = input_artifact_keys if input_artifact_keys is not None else (task.input_artifact_keys or [])
+        
+        subtask = TaskNode(
+            goal=goal,
+            assigned_agent=target_agent.name,
+            input_artifact_keys=artifact_keys,
+            task_id=subtask_id
+        )
+        
+        # Transfer progress tracker if both agents support it
+        if hasattr(self, 'progress_tracker') and hasattr(target_agent, 'set_progress_tracker'):
+            # Start progress tracking for the subtask
+            if self.progress_tracker:
+                self.progress_tracker.start_agent_progress(target_agent.name, subtask.task_id, subtask.goal)
+                target_agent.set_progress_tracker(self.progress_tracker, subtask.task_id)
+        
+        # Execute the target agent
+        return target_agent.execute(goal, context, subtask)
+    
     def complete_step(self, output=None):
         """Helper method for agents to mark steps as completed."""
         if self.progress_tracker and self.current_task_id:

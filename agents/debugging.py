@@ -12,7 +12,8 @@ from core.context import GlobalContext
 from core.models import AgentResponse, TaskNode
 from core.instruction_schemas import (
     InstructionScript, StructuredInstruction, InstructionType,
-    create_fix_code_instruction, create_command_instruction, create_validation_instruction
+    create_fix_code_instruction, create_command_instruction, create_validation_instruction,
+    ToolingInstruction, create_diagnostic_instruction
 )
 
 # Get a logger instance for this module
@@ -190,28 +191,54 @@ class DebuggingAgent(BaseAgent):
             
             # Use ToolingAgent if available for deeper evidence gathering
             if "ToolingAgent" in self.agent_registry:
-                # Log the communication for transparency
+                # Create structured diagnostic instruction for evidence gathering
+                diagnostic_commands = [
+                    "python --version",
+                    "pip list",
+                    "ls -la",
+                    "pytest --version",
+                    "git status --porcelain"
+                ]
+                
+                diagnostic_instruction = create_diagnostic_instruction(
+                    instruction_id=f"debug_evidence_{current_task.task_id}",
+                    commands=diagnostic_commands,
+                    purpose="Gather comprehensive debugging evidence for failed tests",
+                    timeout=60,
+                    expected_artifacts=None
+                )
+                
+                # Store structured instruction in context
+                context.add_artifact("tooling_instruction.json", diagnostic_instruction.model_dump_json(indent=2), current_task.task_id)
+                
+                # Log the structured communication for transparency
                 self.log_communication(context, "ToolingAgent", "delegation", 
-                                     "Gather comprehensive debugging evidence", 
-                                     {"task_type": "evidence_gathering", "artifacts_available": list(context.artifacts.keys())},
+                                     f"Execute structured diagnostic: {diagnostic_instruction.purpose}", 
+                                     {
+                                         "instruction_type": "diagnostic", 
+                                         "commands_count": len(diagnostic_instruction.commands),
+                                         "instruction_id": diagnostic_instruction.instruction_id
+                                     },
                                      current_task.task_id)
                 
                 tooling_agent = self.agent_registry["ToolingAgent"]
-                # Create a subtask for evidence gathering
-                evidence_task = TaskNode(
-                    goal="Gather comprehensive debugging evidence",
-                    assigned_agent="ToolingAgent",
-                    input_artifact_keys=list(context.artifacts.keys())
-                )
                 
-                tooling_result = tooling_agent.execute("Analyze system and environment for debugging", context, evidence_task)
+                # Use helper method to call ToolingAgent with progress tracker transfer
+                tooling_result = self.call_agent_with_progress(
+                    tooling_agent,
+                    f"Execute diagnostic instruction: {diagnostic_instruction.instruction_id}",
+                    context,
+                    current_task,
+                    f"tooling_{current_task.task_id}",
+                    input_artifact_keys=["tooling_instruction.json"]
+                )
                 if tooling_result.success:
                     # Log successful response for transparency
                     self.log_communication(context, "ToolingAgent", "response", 
-                                         f"Successfully gathered evidence: {len(tooling_result.artifacts_generated or [])} artifacts",
+                                         f"Successfully executed diagnostic: {len(tooling_result.artifacts_generated or [])} artifacts",
                                          {"artifacts": tooling_result.artifacts_generated or [], "success": True},
                                          current_task.task_id)
-                    self.report_progress("Tooling evidence gathered", f"ToolingAgent provided {len(tooling_result.artifacts_generated or [])} environment artifacts")
+                    self.report_progress("Structured diagnostics completed", f"ToolingAgent executed {len(diagnostic_instruction.commands)} diagnostic commands successfully")
                     
                     # Extract additional evidence from tooling agent results
                     for artifact_key in tooling_result.artifacts_generated or []:
@@ -221,7 +248,7 @@ class DebuggingAgent(BaseAgent):
                 else:
                     # Log failed response for transparency
                     self.log_communication(context, "ToolingAgent", "error", 
-                                         f"Failed to gather evidence: {tooling_result.message}",
+                                         f"Failed to execute diagnostics: {tooling_result.message}",
                                          {"success": False, "error_message": tooling_result.message},
                                          current_task.task_id)
             
@@ -346,15 +373,17 @@ class DebuggingAgent(BaseAgent):
                 # Store the script in context
                 context.add_artifact("instruction_script.json", repair_script.model_dump_json(indent=2), current_task.task_id)
                 
-                # Execute via ScriptExecutorAgent
+                # Execute via ScriptExecutorAgent with progress tracker transfer
                 script_executor = self.agent_registry["ScriptExecutorAgent"]
-                fix_task = TaskNode(
-                    goal=f"Execute repair script: {repair_script.title}",
-                    assigned_agent="ScriptExecutorAgent",
+                
+                result = self.call_agent_with_progress(
+                    script_executor,
+                    f"Execute repair script: {repair_script.title}",
+                    context,
+                    current_task,
+                    f"script_exec_{current_task.task_id}",
                     input_artifact_keys=["instruction_script.json"]
                 )
-                
-                result = script_executor.execute(f"Execute repair script: {repair_script.title}", context, fix_task)
                 
                 # Log the response for transparency
                 response_type = "response" if result.success else "error"
@@ -393,15 +422,17 @@ class DebuggingAgent(BaseAgent):
                 # Store the design change request in context
                 context.add_artifact("design_change_request.json", json.dumps(design_change_request, indent=2), current_task.task_id)
                 
-                # Execute via CodeGenerationAgent with design update mode
+                # Execute via CodeGenerationAgent with design update mode and progress tracker transfer
                 code_agent = self.agent_registry["CodeGenerationAgent"]
-                fix_task = TaskNode(
-                    goal=f"Apply design changes: {design_change_request['design_problem']}",
-                    assigned_agent="CodeGenerationAgent",
+                
+                result = self.call_agent_with_progress(
+                    code_agent,
+                    f"Design update: {design_change_request['design_problem']}",
+                    context,
+                    current_task,
+                    f"code_gen_{current_task.task_id}",
                     input_artifact_keys=["design_change_request.json"]
                 )
-                
-                result = code_agent.execute(f"Design update: {design_change_request['design_problem']}", context, fix_task)
                 
                 # Log the response for transparency
                 response_type = "response" if result.success else "error"
@@ -460,12 +491,17 @@ class DebuggingAgent(BaseAgent):
                                      current_task.task_id)
                 
                 test_runner = self.agent_registry["TestRunnerAgent"]
-                validation_task = TaskNode(
-                    goal="Validate that the debugging fix resolved the issue",
-                    assigned_agent="TestRunnerAgent"
-                )
                 
-                result = test_runner.execute("Run tests to validate fix", context, validation_task)
+                # Use helper method to call TestRunnerAgent with progress tracker transfer  
+                # TestRunnerAgent doesn't need specific input artifacts for validation
+                result = self.call_agent_with_progress(
+                    test_runner,
+                    "Run tests to validate fix",
+                    context,
+                    current_task,
+                    f"test_validate_{current_task.task_id}",
+                    input_artifact_keys=[]
+                )
                 
                 # Log the TestRunner response
                 test_response_type = "response" if result.success else "error"
@@ -497,12 +533,17 @@ class DebuggingAgent(BaseAgent):
                                              current_task.task_id)
                         
                         test_gen = self.agent_registry["TestGeneratorAgent"]
-                        gen_task = TaskNode(
-                            goal="Generate additional tests to better validate the fix",
-                            assigned_agent="TestGeneratorAgent"
-                        )
                         
-                        gen_result = test_gen.execute("Generate targeted tests for debugging validation", context, gen_task)
+                        # Use helper method to call TestGeneratorAgent with progress tracker transfer
+                        # TestGeneratorAgent doesn't need specific input artifacts
+                        gen_result = self.call_agent_with_progress(
+                            test_gen,
+                            "Generate targeted tests for debugging validation",
+                            context,
+                            current_task,
+                            f"test_gen_{current_task.task_id}",
+                            input_artifact_keys=[]
+                        )
                         
                         # Log the TestGenerator response
                         gen_response_type = "response" if gen_result.success else "error"

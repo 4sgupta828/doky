@@ -499,19 +499,15 @@ class TestRunnerAgent(BaseAgent):
             
             debugging_agent = self.agent_registry["DebuggingAgent"]
             
-            # Create debugging task with all available context, inheriting from current task
-            debug_task = TaskNode(
-                goal=f"Debug test failures: {failure_message}",
-                assigned_agent="DebuggingAgent",
-                input_artifact_keys=["failed_test_report.json", "test_execution_report.json"],
-                task_id=f"debug_{current_task.task_id}"
-            )
-            
-            # Hand over control - DebuggingAgent takes it from here
-            debugging_agent.execute(
-                f"Analyze and fix test failures: {failure_message}", 
-                context, 
-                debug_task
+            # Use helper method to call DebuggingAgent with progress tracker transfer
+            # Pass the specific artifacts that DebuggingAgent needs
+            debugging_result = self.call_agent_with_progress(
+                debugging_agent,
+                f"Analyze and fix test failures: {failure_message}",
+                context,
+                current_task,
+                f"debug_{current_task.task_id}",
+                input_artifact_keys=["failed_test_report.json", "test_execution_report.json"]
             )
             logger.info("✅ Successfully handed over control to DebuggingAgent")
                 

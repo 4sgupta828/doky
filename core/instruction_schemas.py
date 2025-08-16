@@ -121,6 +121,47 @@ class ScriptExecutionResult(BaseModel):
     rollback_script_id: Optional[str] = Field(default=None, description="ID of rollback script if created")
 
 
+class ToolingInstruction(BaseModel):
+    """Structured instruction for ToolingAgent operations - replaces free-form text commands."""
+    instruction_id: str = Field(description="Unique identifier for this tooling operation")
+    command_type: Literal["diagnostic", "build", "test", "install", "deploy", "custom"] = Field(description="Type of tooling operation")
+    commands: List[str] = Field(description="Ordered list of shell commands to execute")
+    purpose: str = Field(description="Clear description of what this operation accomplishes")
+    
+    # Execution parameters
+    timeout: Optional[int] = Field(default=120, description="Timeout in seconds per command")
+    working_directory: Optional[str] = Field(default=None, description="Directory to execute commands in")
+    environment_vars: Optional[Dict[str, str]] = Field(default=None, description="Environment variables to set")
+    
+    # Expected outcomes
+    expected_artifacts: Optional[List[str]] = Field(default=None, description="Expected output files/artifacts")
+    success_criteria: Optional[str] = Field(default=None, description="How to determine if operation succeeded")
+    
+    # Safety and overrides
+    safety_overrides: Optional[List[str]] = Field(default=None, description="Commands to allow despite safety checks")
+    ignore_errors: bool = Field(default=False, description="Continue execution even if some commands fail")
+
+
+class ToolingExecutionResult(BaseModel):
+    """Result of executing a ToolingInstruction."""
+    instruction_id: str = Field(description="ID of the executed tooling instruction")
+    success: bool = Field(description="Whether the tooling operation succeeded")
+    message: str = Field(description="Overall result message")
+    
+    # Command execution details
+    commands_executed: List[str] = Field(description="Commands that were executed")
+    command_results: List[Dict[str, Any]] = Field(description="Detailed results for each command")
+    total_duration: float = Field(description="Total execution time in seconds")
+    
+    # Output and artifacts
+    combined_output: str = Field(description="Combined stdout/stderr from all commands")
+    artifacts_generated: List[str] = Field(default_factory=list, description="Artifacts created by the operation")
+    
+    # Error handling
+    failed_commands: List[str] = Field(default_factory=list, description="Commands that failed")
+    error_details: Optional[str] = Field(default=None, description="Detailed error information")
+
+
 # Helper functions for creating common instruction types
 
 def create_fix_code_instruction(
@@ -176,4 +217,79 @@ def create_validation_instruction(
         instruction_type=InstructionType.VALIDATE_FIX,
         description=description or f"Validate fix by running: {test_command}",
         validation=ValidationSpec(test_command=test_command)
+    )
+
+
+# Helper functions for creating ToolingInstructions
+
+def create_diagnostic_instruction(
+    instruction_id: str,
+    commands: List[str],
+    purpose: str,
+    timeout: int = 120,
+    expected_artifacts: List[str] = None
+) -> ToolingInstruction:
+    """Helper to create diagnostic tooling instructions."""
+    return ToolingInstruction(
+        instruction_id=instruction_id,
+        command_type="diagnostic",
+        commands=commands,
+        purpose=purpose,
+        timeout=timeout,
+        expected_artifacts=expected_artifacts
+    )
+
+
+def create_test_instruction(
+    instruction_id: str,
+    test_commands: List[str],
+    purpose: str = "Execute test suite",
+    timeout: int = 300,
+    expected_artifacts: List[str] = None
+) -> ToolingInstruction:
+    """Helper to create test execution instructions."""
+    return ToolingInstruction(
+        instruction_id=instruction_id,
+        command_type="test",
+        commands=test_commands,
+        purpose=purpose,
+        timeout=timeout,
+        expected_artifacts=expected_artifacts,
+        success_criteria="All tests pass with exit code 0"
+    )
+
+
+def create_build_instruction(
+    instruction_id: str,
+    build_commands: List[str],
+    purpose: str = "Build project",
+    timeout: int = 600,
+    expected_artifacts: List[str] = None
+) -> ToolingInstruction:
+    """Helper to create build instructions."""
+    return ToolingInstruction(
+        instruction_id=instruction_id,
+        command_type="build",
+        commands=build_commands,
+        purpose=purpose,
+        timeout=timeout,
+        expected_artifacts=expected_artifacts,
+        success_criteria="Build completes successfully with exit code 0"
+    )
+
+
+def create_install_instruction(
+    instruction_id: str,
+    install_commands: List[str],
+    purpose: str = "Install dependencies",
+    timeout: int = 300
+) -> ToolingInstruction:
+    """Helper to create dependency installation instructions."""
+    return ToolingInstruction(
+        instruction_id=instruction_id,
+        command_type="install",
+        commands=install_commands,
+        purpose=purpose,
+        timeout=timeout,
+        success_criteria="All dependencies installed successfully"
     )

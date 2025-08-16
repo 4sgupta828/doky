@@ -7,6 +7,7 @@ from typing import List
 # Foundational dependencies from the project structure
 from orchestrator import Orchestrator
 from utils.logger import setup_logger
+from interfaces.collaboration_ui import CollaborationUI
 
 # Get a logger instance for this module
 logger = logging.getLogger(__name__)
@@ -53,9 +54,10 @@ def main(args: List[str]) -> None:
     logger.info(f"Starting Sovereign Agent Collective with mission: '{mission_goal}'")
 
     try:
-        # 3. Instantiate the main orchestrator, passing the workspace path.
-        # The orchestrator's __init__ handles the setup of all core components.
-        orchestrator = Orchestrator(workspace_path=workspace_path)
+        # 3. Instantiate the CLI UI and orchestrator with proper UI interface.
+        # This ensures progress reports are displayed in the CLI format you want.
+        ui = CollaborationUI()
+        orchestrator = Orchestrator(workspace_path=workspace_path, ui_interface=ui)
 
         # 4. Plan the mission first
         plan_response = orchestrator.plan_mission(mission_goal)
