@@ -1,7 +1,7 @@
 # agents/coder.py
 import json
 import logging
-from typing import Dict, Any, List, Literal
+from typing import Dict, Any, List, Literal, Optional
 from enum import Enum
 
 # Foundational dependencies
@@ -19,6 +19,13 @@ class CodeQuality(Enum):
     FAST = "fast"          # Quick, working code - prioritizes speed
     DECENT = "decent"      # Balanced approach - good quality, reasonable speed (default)
     PRODUCTION = "production"  # High-quality, well-documented, robust code
+
+
+class ExecutionMode(Enum):
+    """Defines different execution modes for the code generation agent."""
+    NEW_CODE = "new_code"        # Generate new code from specifications
+    DESIGN_UPDATE = "design_update"  # Update existing code based on design changes
+    REFACTOR = "refactor"        # Refactor existing code while preserving functionality
 
 
 # --- Real LLM Integration Placeholder ---
@@ -106,6 +113,29 @@ class CodeGenerationAgent(BaseAgent):
         # Default to FAST for speed optimization
         logger.info("Using default FAST quality level")
         return self.default_quality
+
+    def _detect_execution_mode(self, goal: str, context: GlobalContext) -> ExecutionMode:
+        """Detects the execution mode based on goal and available artifacts."""
+        goal_lower = goal.lower()
+        
+        # Check for design update keywords
+        if any(keyword in goal_lower for keyword in ['design update', 'design change', 'architectural change', 'redesign']):
+            logger.info("Detected DESIGN_UPDATE mode from goal keywords")
+            return ExecutionMode.DESIGN_UPDATE
+        
+        # Check for refactor keywords  
+        if any(keyword in goal_lower for keyword in ['refactor', 'restructure', 'reorganize', 'improve design']):
+            logger.info("Detected REFACTOR mode from goal keywords")
+            return ExecutionMode.REFACTOR
+        
+        # Check if we have design change artifacts from debugging agent
+        if context.get_artifact("design_change_request.json"):
+            logger.info("Detected DESIGN_UPDATE mode from design change artifact")
+            return ExecutionMode.DESIGN_UPDATE
+        
+        # Default to new code generation
+        logger.info("Using default NEW_CODE mode")
+        return ExecutionMode.NEW_CODE
     
     def _build_prompt(self, files_to_generate: List[str], spec: str, existing_code: Dict[str, str], quality: CodeQuality = None) -> str:
         """
@@ -172,6 +202,210 @@ class CodeGenerationAgent(BaseAgent):
         Now, generate the appropriate code files based on the specification.
         """
 
+    def _build_design_update_prompt(self, design_change_request: Dict[str, Any], existing_code: Dict[str, str], quality: CodeQuality) -> str:
+        """
+        Constructs a specialized prompt for design updates based on evidence and reasoning.
+        """
+        quality_config = self._get_quality_instructions(quality)
+        existing_code_str = "\n".join(
+            f"--- File: {path} ---\n```python\n{content}\n```"
+            for path, content in existing_code.items()
+        )
+        
+        # Extract design change details
+        root_cause = design_change_request.get("root_cause_analysis", "Unknown issue")
+        design_problem = design_change_request.get("design_problem", "Design issue identified")
+        recommended_changes = design_change_request.get("recommended_changes", [])
+        evidence = design_change_request.get("evidence", {})
+        
+        changes_text = "\n".join([f"- {change}" for change in recommended_changes])
+        
+        return f"""
+        You are an expert software architect and developer. You need to update existing code
+        based on a well-reasoned design analysis from a debugging investigation.
+
+        **DESIGN ANALYSIS REPORT:**
+        ---
+        Root Cause: {root_cause}
+        
+        Design Problem: {design_problem}
+        
+        Recommended Changes:
+        {changes_text}
+        
+        Evidence:
+        {json.dumps(evidence, indent=2)}
+        ---
+
+        **EXISTING CODE TO UPDATE:**
+        ---
+        {existing_code_str if existing_code else "No existing code provided."}
+        ---
+
+        **Code Quality Level: {quality.value.upper()}**
+        
+        **Quality-Specific Instructions:**
+        {chr(10).join([f"{i+1}.  {instruction}" for i, instruction in enumerate(quality_config["instructions"])])}
+        
+        **DESIGN UPDATE REQUIREMENTS:**
+        - Implement the recommended design changes precisely
+        - Preserve existing functionality unless explicitly changing it
+        - Follow the evidence-based reasoning provided
+        - Ensure the changes address the root cause identified
+        - Maintain code consistency and style with existing codebase
+        - Add appropriate comments explaining the design changes
+        - Your output MUST be a single, valid JSON object with file paths as keys and updated code content as values
+        
+        **JSON Output Format Example:**
+        {{
+            "src/module.py": "# Updated design\\nclass ImprovedDesign:\\n    def __init__(self):\\n        # Design change: explanation\\n        pass",
+            "src/utils.py": "# Supporting changes\\ndef new_helper_function():\\n    return 'updated'"
+        }}
+
+        **IMPORTANT:** Generate the updated code that implements the design changes based on the evidence and analysis provided.
+        
+        Now, implement the design updates.
+        """
+
+    def _handle_design_update(self, goal: str, context: GlobalContext, current_task: TaskNode) -> AgentResponse:
+        """Handle design update execution mode with evidence-based changes."""
+        logger.info("Executing design update mode")
+        self.report_progress("Design update mode", "Processing evidence-based design changes")
+        
+        # 1. Get design change request from debugging agent
+        design_change_request = context.get_artifact("design_change_request.json")
+        if not design_change_request:
+            return AgentResponse(
+                success=False,
+                message="No design change request found. Expected 'design_change_request.json' artifact from DebuggingAgent."
+            )
+        
+        if isinstance(design_change_request, str):
+            try:
+                design_change_request = json.loads(design_change_request)
+            except json.JSONDecodeError as e:
+                return AgentResponse(
+                    success=False,
+                    message=f"Invalid design change request JSON: {e}"
+                )
+        
+        self.report_intermediate_output("design_change_request", design_change_request)
+        
+        # 2. Get files to modify
+        files_to_modify = design_change_request.get("files_to_modify", [])
+        if not files_to_modify:
+            return AgentResponse(
+                success=False,
+                message="No files specified for modification in design change request."
+            )
+        
+        # 3. Load existing code for the files to modify
+        existing_code = {}
+        for file_path in files_to_modify:
+            content = context.workspace.get_file_content(file_path)
+            if content:
+                existing_code[file_path] = content
+            else:
+                logger.warning(f"File {file_path} not found in workspace")
+        
+        if not existing_code:
+            return AgentResponse(
+                success=False,
+                message="No existing code found for the specified files to modify."
+            )
+        
+        self.report_thinking(f"Loaded {len(existing_code)} existing files for design update")
+        
+        # 4. Detect quality level
+        quality_level = self._detect_quality_level(goal, context)
+        logger.info(f"Using code quality level: {quality_level.value.upper()}")
+        self.complete_step(f"Quality level: {quality_level.value.upper()}")
+        
+        # 5. Generate design update prompt and get LLM response
+        try:
+            self.report_progress("Building design update prompt", "Creating evidence-based update instructions")
+            prompt = self._build_design_update_prompt(design_change_request, existing_code, quality_level)
+            self.complete_step("Design update prompt constructed")
+            
+            logger.debug("Using regular invoke for design update")
+            llm_response_str = self.llm_client.invoke(prompt)
+            
+            # Parse and validate response
+            response_data = json.loads(llm_response_str)
+            if not isinstance(response_data, dict):
+                raise ValueError("LLM response is not a valid dictionary.")
+            
+            # Extract the files from response (handle both direct format and structured format)
+            if "files" in response_data:
+                updated_code_map = response_data["files"]
+            else:
+                updated_code_map = response_data
+            
+            if not isinstance(updated_code_map, dict) or not updated_code_map:
+                raise ValueError("No valid code updates returned from LLM.")
+            
+            logger.info(f"LLM generated design updates for {len(updated_code_map)} files: {list(updated_code_map.keys())}")
+            
+            # Display the updated code
+            if len(updated_code_map) == 1:
+                file_path, content = next(iter(updated_code_map.items()))
+                code_with_filename = {"content": content, "filename": file_path}
+                self.report_intermediate_output("updated_code_snippet", code_with_filename)
+            else:
+                self.report_intermediate_output("updated_code_files", updated_code_map)
+                
+        except (json.JSONDecodeError, ValueError) as e:
+            msg = f"Failed to parse LLM response for design update. Error: {e}"
+            logger.error(msg)
+            return AgentResponse(success=False, message=msg)
+        except Exception as e:
+            error_msg = f"Design update generation failed: {e}"
+            logger.error(error_msg, exc_info=True)
+            return AgentResponse(success=False, message=error_msg)
+        
+        # 6. Write the updated code to workspace
+        written_files = []
+        modified_files = {}
+        
+        for file_path, code_content in updated_code_map.items():
+            if not isinstance(code_content, str) or not code_content.strip():
+                logger.warning(f"Skipping invalid code for file '{file_path}'")
+                continue
+            
+            try:
+                # Get original content for diff
+                original_content = context.workspace.get_file_content(file_path)
+                
+                # Write updated content
+                context.workspace.write_file_content(file_path, code_content, current_task.task_id)
+                written_files.append(file_path)
+                logger.info(f"Successfully updated file '{file_path}' with design changes")
+                
+                # Track for diff display
+                if original_content and original_content != code_content:
+                    modified_files[file_path] = {
+                        "old": original_content,
+                        "new": code_content
+                    }
+                    
+            except Exception as e:
+                msg = f"Failed to write updated file '{file_path}' to workspace. Error: {e}"
+                logger.error(msg, exc_info=True)
+                return AgentResponse(success=False, message=msg)
+        
+        if not written_files:
+            return AgentResponse(success=False, message="No files were successfully updated.")
+        
+        # Display diff for modified files
+        if modified_files:
+            self.report_intermediate_output("design_update_diff", modified_files)
+            
+        return AgentResponse(
+            success=True,
+            message=f"Successfully applied design updates to {len(written_files)} files based on debugging analysis.",
+            artifacts_generated=written_files
+        )
+
     def execute(self, goal: str, context: GlobalContext, current_task: TaskNode) -> AgentResponse:
         # Temporarily enable DEBUG logging for this agent
         original_level = logger.level
@@ -193,7 +427,15 @@ class CodeGenerationAgent(BaseAgent):
             # Report meaningful progress
             self.report_progress("Generating code", f"Processing request: '{goal[:80]}...'")
 
-            # 1. Retrieve necessary artifacts from the context.
+            # 0. Detect execution mode
+            execution_mode = self._detect_execution_mode(goal, context)
+            self.report_thinking(f"Detected execution mode: {execution_mode.value.upper()}")
+            
+            # Handle design update mode specially
+            if execution_mode == ExecutionMode.DESIGN_UPDATE:
+                return self._handle_design_update(goal, context, current_task)
+
+            # 1. Retrieve necessary artifacts from the context (for normal code generation).
             spec_key = "technical_spec.md"
             manifest_key = "file_manifest.json"
             

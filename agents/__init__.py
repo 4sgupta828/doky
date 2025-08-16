@@ -17,6 +17,7 @@ from .test_runner import TestRunnerAgent
 from .context_builder import ContextBuilderAgent
 from .tooling import ToolingAgent
 from .debugging import DebuggingAgent
+from .script_executor import ScriptExecutorAgent
 from .quality_officer import ChiefQualityOfficerAgent
 from .plan_refiner import PlanRefinementAgent
 
@@ -48,6 +49,7 @@ AGENT_REGISTRY: Dict[str, Type[BaseAgent]] = {
 
     # Diagnostics & Quality Agents
     "DebuggingAgent": DebuggingAgent,
+    "ScriptExecutorAgent": ScriptExecutorAgent,
     "ChiefQualityOfficerAgent": ChiefQualityOfficerAgent,
 }
 
@@ -65,6 +67,7 @@ AGENT_ALIASES: Dict[str, str] = {
     "@context": "ContextBuilderAgent",
     "@run": "ToolingAgent",
     "@debug": "DebuggingAgent",
+    "@script": "ScriptExecutorAgent",
     "@audit": "ChiefQualityOfficerAgent",
 }
 
@@ -130,7 +133,7 @@ if __name__ == "__main__":
         def test_registry_population(self):
             """Tests if the registry contains all the expected agents."""
             print("\n--- [Test Case 1: Registry Population] ---")
-            self.assertEqual(len(AGENT_REGISTRY), 11)
+            self.assertEqual(len(AGENT_REGISTRY), 12)
             self.assertIn("PlannerAgent", AGENT_REGISTRY)
             self.assertIn("CodeGenerationAgent", AGENT_REGISTRY)
             self.assertIn("TestRunnerAgent", AGENT_REGISTRY)

@@ -1,12 +1,19 @@
 # agents/debugging.py
 import json
 import logging
-from typing import Dict, Any
+from typing import Dict, Any, List
+from datetime import datetime
+import uuid
+from pathlib import Path
 
 # Foundational dependencies
 from .base import BaseAgent
 from core.context import GlobalContext
 from core.models import AgentResponse, TaskNode
+from core.instruction_schemas import (
+    InstructionScript, StructuredInstruction, InstructionType,
+    create_fix_code_instruction, create_command_instruction, create_validation_instruction
+)
 
 # Get a logger instance for this module
 logger = logging.getLogger(__name__)
@@ -316,31 +323,85 @@ class DebuggingAgent(BaseAgent):
             }
 
     def _execute_fix_strategy(self, hypothesis: Dict[str, Any], context: GlobalContext, current_task: TaskNode) -> Dict[str, Any]:
-        """Phase 3: Execute the chosen fix strategy via appropriate agents."""
+        """Phase 3: Execute the chosen fix strategy by creating and executing structured repair scripts."""
         solution_type = hypothesis.get("solution_type", "DESIGN_CHANGE")
         
-        self.report_thinking(f"Executing {solution_type} fix strategy. This will involve {'direct code changes via CodeAgent' if solution_type == 'SURGICAL' else 'specification-driven approach via SpecAgent + CodeAgent'}.")
+        self.report_thinking(f"Creating structured repair script for {solution_type} fix strategy. This will generate precise, executable instructions for the ScriptExecutorAgent.")
         
         try:
-            if solution_type == "SURGICAL" and "CodeGenerationAgent" in self.agent_registry:
-                # Direct surgical fix via CodeGenerationAgent
-                logger.info("Executing surgical fix via CodeGenerationAgent")
-                self.report_progress("Surgical fix approach", "Applying direct code changes via CodeGenerationAgent")
+            if solution_type == "SURGICAL" and "ScriptExecutorAgent" in self.agent_registry:
+                # Create surgical fix script
+                logger.info("Creating surgical fix script for ScriptExecutorAgent")
+                self.report_progress("Surgical fix approach", "Generating structured repair script for precise code changes")
+                
+                # Generate structured repair script
+                repair_script = self._create_surgical_repair_script(hypothesis, context, current_task)
+                
+                # Log the delegation for transparency
+                self.log_communication(context, "ScriptExecutorAgent", "delegation", 
+                                     f"Execute surgical repair script: {repair_script.title}",
+                                     {"solution_type": "SURGICAL", "script_id": repair_script.script_id, "instructions_count": len(repair_script.instructions)},
+                                     current_task.task_id)
+                
+                # Store the script in context
+                context.add_artifact("instruction_script.json", repair_script.model_dump_json(indent=2), current_task.task_id)
+                
+                # Execute via ScriptExecutorAgent
+                script_executor = self.agent_registry["ScriptExecutorAgent"]
+                fix_task = TaskNode(
+                    goal=f"Execute repair script: {repair_script.title}",
+                    assigned_agent="ScriptExecutorAgent",
+                    input_artifact_keys=["instruction_script.json"]
+                )
+                
+                result = script_executor.execute(f"Execute repair script: {repair_script.title}", context, fix_task)
+                
+                # Log the response for transparency
+                response_type = "response" if result.success else "error"
+                self.log_communication(context, "ScriptExecutorAgent", response_type, 
+                                     result.message,
+                                     {"success": result.success, "artifacts": result.artifacts_generated},
+                                     current_task.task_id)
+                
+                # Report fix execution results
+                if result.success:
+                    self.report_progress("Surgical fix applied", f"ScriptExecutor successfully applied changes: {len(result.artifacts_generated or [])} files modified")
+                else:
+                    self.report_progress("Surgical fix failed", f"ScriptExecutor failed: {result.message[:60]}...")
+                    
+                return {"success": result.success, "artifacts_generated": result.artifacts_generated, "message": result.message}
+                
+            elif solution_type == "DESIGN_CHANGE" and "CodeGenerationAgent" in self.agent_registry:
+                # Complex fix requiring structured design changes via CodeGenerationAgent
+                logger.info("Creating structured design change request for CodeGenerationAgent")
+                self.report_progress("Design change approach", "Generating evidence-based design change request")
+                
+                # Create structured design change request with evidence and reasoning
+                design_change_request = self._create_design_change_request(hypothesis, context, current_task)
                 
                 # Log the delegation for transparency
                 self.log_communication(context, "CodeGenerationAgent", "delegation", 
-                                     f"Apply surgical fix: {hypothesis.get('recommended_strategy', 'Fix the issue')}",
-                                     {"solution_type": "SURGICAL", "strategy": hypothesis.get('recommended_strategy')},
+                                     f"Apply design changes: {design_change_request['design_problem']}",
+                                     {
+                                         "solution_type": "DESIGN_CHANGE", 
+                                         "request_id": design_change_request['request_id'], 
+                                         "files_to_modify": len(design_change_request['files_to_modify']),
+                                         "change_scope": "design_level"
+                                     },
                                      current_task.task_id)
                 
-                coder_agent = self.agent_registry["CodeGenerationAgent"]
+                # Store the design change request in context
+                context.add_artifact("design_change_request.json", json.dumps(design_change_request, indent=2), current_task.task_id)
+                
+                # Execute via CodeGenerationAgent with design update mode
+                code_agent = self.agent_registry["CodeGenerationAgent"]
                 fix_task = TaskNode(
-                    goal=f"Apply surgical fix: {hypothesis.get('recommended_strategy', 'Fix the issue')}",
+                    goal=f"Apply design changes: {design_change_request['design_problem']}",
                     assigned_agent="CodeGenerationAgent",
-                    input_artifact_keys=["debug_hypothesis.json"]
+                    input_artifact_keys=["design_change_request.json"]
                 )
                 
-                result = coder_agent.execute(hypothesis["recommended_strategy"], context, fix_task)
+                result = code_agent.execute(f"Design update: {design_change_request['design_problem']}", context, fix_task)
                 
                 # Log the response for transparency
                 response_type = "response" if result.success else "error"
@@ -351,77 +412,12 @@ class DebuggingAgent(BaseAgent):
                 
                 # Report fix execution results
                 if result.success:
-                    self.report_progress("Surgical fix applied", f"CodeAgent successfully applied changes: {len(result.artifacts_generated or [])} files modified")
+                    self.report_progress("Design change applied", f"CodeGenerationAgent successfully applied design changes: {len(result.artifacts_generated or [])} files modified")
+                    self.report_thinking(f"Successfully applied evidence-based design changes. Modified files: {', '.join(result.artifacts_generated or [])}")
                 else:
-                    self.report_progress("Surgical fix failed", f"CodeAgent failed: {result.message[:60]}...")
+                    self.report_progress("Design change failed", f"CodeGenerationAgent failed: {result.message[:60]}...")
                     
                 return {"success": result.success, "artifacts_generated": result.artifacts_generated, "message": result.message}
-                
-            elif solution_type == "DESIGN_CHANGE" and "SpecGenerationAgent" in self.agent_registry and "CodeGenerationAgent" in self.agent_registry:
-                # Complex fix requiring specification first
-                logger.info("Executing design change via SpecAgent -> CoderAgent")
-                self.report_progress("Design change approach", "Multi-step fix: SpecAgent → CodeAgent workflow")
-                
-                # Log the delegation to SpecAgent for transparency
-                self.log_communication(context, "SpecGenerationAgent", "delegation", 
-                                     f"Create specification for: {hypothesis.get('recommended_strategy', 'Fix the issue')}",
-                                     {"solution_type": "DESIGN_CHANGE", "hypothesis": hypothesis.get('primary_hypothesis')},
-                                     current_task.task_id)
-                
-                spec_agent = self.agent_registry["SpecGenerationAgent"]
-                coder_agent = self.agent_registry["CodeGenerationAgent"]
-                
-                # First, generate specification
-                spec_task = TaskNode(
-                    goal=f"Create specification for: {hypothesis.get('recommended_strategy', 'Fix the issue')}",
-                    assigned_agent="SpecGenerationAgent",
-                    input_artifact_keys=["debug_hypothesis.json"]
-                )
-                
-                spec_result = spec_agent.execute(f"Create spec to resolve: {hypothesis['primary_hypothesis']}", context, spec_task)
-                
-                # Log the SpecAgent response
-                spec_response_type = "response" if spec_result.success else "error"
-                self.log_communication(context, "SpecGenerationAgent", spec_response_type, 
-                                     spec_result.message,
-                                     {"success": spec_result.success, "artifacts": spec_result.artifacts_generated},
-                                     current_task.task_id)
-                
-                if spec_result.success:
-                    self.report_progress("Specification complete", f"SpecAgent created {len(spec_result.artifacts_generated or [])} specification artifacts")
-                    
-                    # Log the delegation to CodeGenerationAgent for transparency
-                    self.log_communication(context, "CodeGenerationAgent", "delegation", 
-                                         "Implement the debugging fix specification",
-                                         {"input_artifacts": spec_result.artifacts_generated or [], "chain_source": "SpecGenerationAgent"},
-                                         current_task.task_id)
-                    
-                    # Then implement the specification
-                    code_task = TaskNode(
-                        goal="Implement the debugging fix specification",
-                        assigned_agent="CodeGenerationAgent", 
-                        input_artifact_keys=spec_result.artifacts_generated or []
-                    )
-                    
-                    code_result = coder_agent.execute("Implement the specification to fix the issue", context, code_task)
-                    
-                    # Log the CodeGenerationAgent response
-                    code_response_type = "response" if code_result.success else "error"
-                    self.log_communication(context, "CodeGenerationAgent", code_response_type, 
-                                         code_result.message,
-                                         {"success": code_result.success, "artifacts": code_result.artifacts_generated},
-                                         current_task.task_id)
-                    
-                    # Report implementation results
-                    if code_result.success:
-                        self.report_progress("Implementation complete", f"CodeAgent implemented spec: {len(code_result.artifacts_generated or [])} files created/modified")
-                    else:
-                        self.report_progress("Implementation failed", f"CodeAgent failed to implement: {code_result.message[:60]}...")
-                        
-                    return {"success": code_result.success, "artifacts_generated": code_result.artifacts_generated, "message": code_result.message}
-                else:
-                    self.report_progress("Specification failed", f"SpecAgent failed: {spec_result.message[:60]}...")
-                    return {"success": False, "message": f"Specification generation failed: {spec_result.message}"}
                     
             else:
                 # Fallback: create manual fix recommendations
@@ -533,6 +529,275 @@ class DebuggingAgent(BaseAgent):
             logger.error(f"Fix validation failed: {e}")
             self.report_thinking(f"Validation phase encountered unexpected error: {e}. This indicates a system issue during test execution.")
             return {"success": False, "message": f"Validation error: {e}"}
+
+    def _create_surgical_repair_script(self, hypothesis: Dict[str, Any], context: GlobalContext, current_task: TaskNode) -> InstructionScript:
+        """Create a structured repair script for surgical fixes."""
+        script_id = f"surgical_repair_{current_task.task_id}_{uuid.uuid4().hex[:8]}"
+        
+        # Analyze the hypothesis to generate specific repair instructions
+        instructions = []
+        
+        # Get the failed test report and code context for analysis
+        failed_report = context.get_artifact("failed_test_report.json")
+        code_context = context.get_artifact("targeted_code_context.txt")
+        
+        if failed_report and isinstance(failed_report, str):
+            try:
+                failed_report = json.loads(failed_report)
+            except:
+                pass
+        
+        # Extract specific fix instructions from the hypothesis
+        recommended_strategy = hypothesis.get("recommended_strategy", "Apply general fix")
+        primary_hypothesis = hypothesis.get("primary_hypothesis", "Unknown issue")
+        
+        # Create structured repair instructions based on the analysis
+        if "function" in recommended_strategy.lower() or "method" in recommended_strategy.lower():
+            # Function-level fix
+            instructions.append(create_fix_code_instruction(
+                instruction_id=f"fix_function_{len(instructions)+1}",
+                file_path=self._extract_file_path(failed_report, code_context),
+                issue_description=primary_hypothesis,
+                fix_content=self._generate_fix_content(hypothesis, context),
+                test_command=self._determine_test_command(context)
+            ))
+        else:
+            # General code fix
+            instructions.append(create_fix_code_instruction(
+                instruction_id=f"fix_code_{len(instructions)+1}",
+                file_path=self._extract_file_path(failed_report, code_context),
+                issue_description=primary_hypothesis,
+                fix_content=self._generate_fix_content(hypothesis, context),
+                test_command=self._determine_test_command(context)
+            ))
+        
+        # Add validation instruction
+        test_command = self._determine_test_command(context)
+        if test_command:
+            instructions.append(create_validation_instruction(
+                instruction_id="validate_fix",
+                test_command=test_command,
+                description="Validate that the fix resolves the issue"
+            ))
+        
+        # Create the repair script
+        return InstructionScript(
+            script_id=script_id,
+            title=f"Surgical Fix: {primary_hypothesis[:50]}...",
+            description=f"Automated surgical repair for: {recommended_strategy}",
+            created_by="DebuggingAgent",
+            target_issue=primary_hypothesis,
+            estimated_duration="1-3 minutes",
+            instructions=instructions,
+            backup_required=True,
+            rollback_strategy="automatic_backup"
+        )
+
+    def _extract_file_path(self, failed_report: Dict, code_context: str) -> str:
+        """Extract the most likely file path from failure context."""
+        # Try to extract from failed report
+        if failed_report:
+            if isinstance(failed_report, dict):
+                # Look for file paths in various places
+                for key in ['file', 'filename', 'path', 'source_file']:
+                    if key in failed_report:
+                        return str(failed_report[key])
+                
+                # Check in error details
+                if 'error' in failed_report:
+                    error_str = str(failed_report['error'])
+                    # Look for Python file patterns
+                    import re
+                    file_match = re.search(r'File "([^"]+\.py)"', error_str)
+                    if file_match:
+                        return file_match.group(1)
+        
+        # Fallback: assume main.py if no specific file found
+        return "main.py"
+
+    def _generate_fix_content(self, hypothesis: Dict[str, Any], context: GlobalContext) -> str:
+        """Generate the actual fix content based on hypothesis."""
+        # This would ideally use the LLM to generate specific fix code
+        # For now, return a placeholder that includes the strategy
+        strategy = hypothesis.get("recommended_strategy", "Fix the issue")
+        
+        return f"""# Generated fix based on: {strategy}
+# TODO: Implement specific fix for: {hypothesis.get('primary_hypothesis', 'Unknown issue')}
+# This is a placeholder - in practice, would generate actual fix code
+pass"""
+
+    def _determine_test_command(self, context: GlobalContext) -> str:
+        """Determine appropriate test command based on context."""
+        # Look for common test frameworks
+        workspace_path = Path(context.workspace_path) if isinstance(context.workspace_path, str) else context.workspace_path
+        
+        # Check for pytest
+        if (workspace_path / "pytest.ini").exists() or (workspace_path / "pyproject.toml").exists():
+            return "pytest -v"
+        
+        # Check for unittest
+        if (workspace_path / "tests").exists():
+            return "python -m pytest tests/"
+        
+        # Fallback
+        return "python -m pytest"
+
+    def _create_design_change_request(self, hypothesis: Dict[str, Any], context: GlobalContext, current_task: TaskNode) -> Dict[str, Any]:
+        """Create a structured design change request with evidence and reasoning."""
+        # Get evidence from context
+        failed_report = context.get_artifact("failed_test_report.json")
+        code_context = context.get_artifact("targeted_code_context.txt")
+        
+        if failed_report and isinstance(failed_report, str):
+            try:
+                failed_report = json.loads(failed_report)
+            except:
+                pass
+        
+        # Extract key information
+        root_cause = hypothesis.get("primary_hypothesis", "Unknown design issue")
+        recommended_strategy = hypothesis.get("recommended_strategy", "Apply design improvements")
+        confidence = hypothesis.get("confidence_level", "medium")
+        
+        # Analyze what files need to be modified
+        files_to_modify = self._identify_files_for_design_change(failed_report, code_context, hypothesis)
+        
+        # Create evidence-based reasoning
+        evidence = {
+            "failure_analysis": failed_report.get("error", "Unknown error") if failed_report else "No failure report",
+            "affected_components": self._extract_affected_components(failed_report, code_context),
+            "complexity_assessment": hypothesis.get("complexity_assessment", "moderate"),
+            "risk_factors": hypothesis.get("risk_assessment", "Standard design change risks")
+        }
+        
+        # Generate specific design recommendations
+        design_recommendations = self._generate_design_recommendations(hypothesis, evidence)
+        
+        # Create the structured request
+        design_change_request = {
+            "request_id": f"design_change_{current_task.task_id}_{uuid.uuid4().hex[:8]}",
+            "created_by": "DebuggingAgent",
+            "timestamp": datetime.now().isoformat(),
+            
+            # Core analysis
+            "root_cause_analysis": root_cause,
+            "design_problem": f"Design issue identified: {recommended_strategy}",
+            "confidence_level": confidence,
+            
+            # Evidence and reasoning
+            "evidence": evidence,
+            "analysis_summary": f"Based on debugging analysis, the issue '{root_cause}' requires design-level changes rather than simple fixes.",
+            
+            # Specific changes requested
+            "recommended_changes": design_recommendations,
+            "files_to_modify": files_to_modify,
+            "change_scope": "design_level",  # vs "tactical"
+            
+            # Implementation guidance
+            "preserve_functionality": True,
+            "backward_compatibility": True,
+            "testing_requirements": self._determine_test_command(context),
+            
+            # Quality and validation
+            "validation_criteria": [
+                "All existing tests continue to pass",
+                "New design addresses the root cause",
+                "Code maintainability is improved",
+                "No performance regressions"
+            ]
+        }
+        
+        return design_change_request
+
+    def _identify_files_for_design_change(self, failed_report: Dict, code_context: str, hypothesis: Dict) -> List[str]:
+        """Identify which files need to be modified for the design change."""
+        files = []
+        
+        # Extract from failure report
+        if failed_report:
+            if 'file' in failed_report:
+                files.append(failed_report['file'])
+            elif 'filename' in failed_report:
+                files.append(failed_report['filename'])
+        
+        # Look for patterns in the strategy that indicate multiple files
+        strategy = hypothesis.get("recommended_strategy", "").lower()
+        
+        if any(keyword in strategy for keyword in ['refactor', 'restructure', 'split', 'separate']):
+            # Design changes often affect multiple files
+            base_file = files[0] if files else "main.py"
+            # Suggest related files that might need changes
+            if base_file.endswith('.py'):
+                base_name = base_file.replace('.py', '')
+                files.extend([
+                    f"{base_name}_utils.py",
+                    f"{base_name}_config.py",
+                    f"tests/test_{base_name}.py"
+                ])
+        
+        # Fallback to main file if nothing found
+        if not files:
+            files = ["main.py"]
+            
+        return files
+
+    def _extract_affected_components(self, failed_report: Dict, code_context: str) -> List[str]:
+        """Extract the names of affected components from the context."""
+        components = []
+        
+        if failed_report:
+            if 'function' in failed_report:
+                components.append(f"Function: {failed_report['function']}")
+            if 'class' in failed_report:
+                components.append(f"Class: {failed_report['class']}")
+        
+        # Extract function/class names from code context
+        if code_context:
+            import re
+            # Find function definitions
+            functions = re.findall(r'def\s+(\w+)\s*\(', code_context)
+            components.extend([f"Function: {func}" for func in functions[:3]])  # Limit to first 3
+            
+            # Find class definitions
+            classes = re.findall(r'class\s+(\w+)', code_context)
+            components.extend([f"Class: {cls}" for cls in classes[:3]])  # Limit to first 3
+        
+        return components or ["Unknown component"]
+
+    def _generate_design_recommendations(self, hypothesis: Dict, evidence: Dict) -> List[str]:
+        """Generate specific, actionable design recommendations."""
+        recommendations = []
+        
+        strategy = hypothesis.get("recommended_strategy", "").lower()
+        root_cause = hypothesis.get("primary_hypothesis", "").lower()
+        
+        # Generate recommendations based on common design patterns
+        if "validation" in root_cause or "input" in root_cause:
+            recommendations.append("Implement proper input validation with clear error messages")
+            recommendations.append("Add parameter type checking and boundary validation")
+        
+        if "error handling" in root_cause or "exception" in root_cause:
+            recommendations.append("Implement comprehensive error handling strategy")
+            recommendations.append("Add proper exception hierarchy and error propagation")
+        
+        if "separation" in strategy or "coupling" in root_cause:
+            recommendations.append("Separate concerns into distinct modules or classes")
+            recommendations.append("Reduce coupling between components")
+        
+        if "performance" in root_cause or "efficiency" in root_cause:
+            recommendations.append("Optimize algorithm complexity and resource usage")
+            recommendations.append("Add caching or memoization where appropriate")
+        
+        # Fallback recommendations
+        if not recommendations:
+            recommendations = [
+                "Improve code structure and organization",
+                "Add proper abstraction layers",
+                "Enhance error handling and validation",
+                "Improve code documentation and clarity"
+            ]
+        
+        return recommendations
 
 
 # --- Self-Testing Block ---
