@@ -27,10 +27,7 @@ def main(args: List[str]) -> None:
     Args:
         args: A list of command-line arguments, typically from `sys.argv[1:]`.
     """
-    # 1. Setup application-wide logging.
-    setup_logger()
-
-    # 2. Parse command-line arguments.
+    # 1. Parse command-line arguments first to get the quiet-logs flag.
     parser = argparse.ArgumentParser(
         description="Launch the Sovereign Agent Collective in an interactive CLI session."
     )
@@ -46,6 +43,11 @@ def main(args: List[str]) -> None:
         default=None,
         help="Path to a snapshot file to resume from (for crash recovery)."
     )
+    parser.add_argument(
+        "--quiet-logs",
+        action="store_true",
+        help="Suppress console logging messages while preserving UI transparency/collaboration messages."
+    )
 
     # We check for a special '--test' flag to run the built-in test suite.
     if "--test" in args:
@@ -55,6 +57,10 @@ def main(args: List[str]) -> None:
     parsed_args = parser.parse_args(args)
     workspace_path = parsed_args.workspace
     resume_snapshot = parsed_args.resume
+    quiet_logs = parsed_args.quiet_logs
+
+    # 2. Setup application-wide logging with optional console suppression.
+    setup_logger(suppress_console_logs=quiet_logs)
 
     # 3. Instantiate and start the interactive session.
     try:

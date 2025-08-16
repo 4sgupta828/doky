@@ -10,6 +10,30 @@ from pydantic import BaseModel, Field, ValidationError
 # Get a logger instance for this module to report on model-related events.
 logger = logging.getLogger(__name__)
 
+# --- Agent Execution Models (Function-Call Semantics) ---
+
+class AgentExecutionError(Exception):
+    """Raised when agent execution fails due to missing inputs or validation errors."""
+    pass
+
+class AgentResult(BaseModel):
+    """
+    Standardized result from agent execution with function-call semantics.
+    Replaces the old AgentResponse for explicit input/output handling.
+    """
+    success: bool = Field(..., description="Whether the agent execution succeeded")
+    message: str = Field(..., description="Human-readable summary of execution outcome")
+    
+    # Explicit outputs - no more artifact hunting
+    outputs: Dict[str, Any] = Field(default_factory=dict, description="Structured outputs from agent execution")
+    
+    # Execution tracking
+    execution_id: str = Field(default_factory=lambda: f"exec_{uuid.uuid4().hex[:8]}", description="Unique execution identifier")
+    duration_seconds: Optional[float] = Field(None, description="Execution duration in seconds")
+    
+    # Error details for debugging
+    error_details: Optional[Dict[str, Any]] = Field(None, description="Detailed error information if execution failed")
+
 # --- Inter-Agent Communication Models ---
 
 class AgentCommunication(BaseModel):

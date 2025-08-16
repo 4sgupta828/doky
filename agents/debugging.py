@@ -9,12 +9,13 @@ from pathlib import Path
 # Foundational dependencies
 from .base import BaseAgent
 from core.context import GlobalContext
-from core.models import AgentResponse, TaskNode
+from core.models import AgentResponse, AgentResult, AgentExecutionError, TaskNode
 from core.instruction_schemas import (
     InstructionScript, StructuredInstruction, InstructionType,
     create_fix_code_instruction, create_command_instruction, create_validation_instruction,
     ToolingInstruction, create_diagnostic_instruction
 )
+from utils.env_detector import get_python_version_command, get_pip_list_command
 
 # Get a logger instance for this module
 logger = logging.getLogger(__name__)
@@ -46,6 +47,306 @@ class DebuggingAgent(BaseAgent):
         self.llm_client = llm_client or LLMClient()
         self.agent_registry = agent_registry or {}
         self.max_debug_iterations = 3
+    
+    # === FUNCTION-CALL INTERFACE ===
+    
+    def required_inputs(self) -> List[str]:
+        """Required inputs for DebuggingAgent execution."""
+        return ["failed_test_report", "code_context"]
+    
+    def optional_inputs(self) -> List[str]:
+        """Optional inputs for DebuggingAgent execution."""
+        return ["environment_data", "previous_attempts", "max_iterations"]
+    
+    def execute_v2(self, goal: str, inputs: Dict[str, Any], global_context: GlobalContext) -> AgentResult:
+        """
+        NEW INTERFACE: Debug failures with explicit inputs/outputs.
+        
+        This replaces the artifact hunting with direct data passing.
+        """
+        logger.info(f"DebuggingAgent executing with function-call interface: '{goal}'")
+        
+        # Fail-fast validation
+        self.validate_inputs(inputs)
+        
+        # Extract explicit inputs
+        failed_test_report = inputs["failed_test_report"]
+        code_context = inputs["code_context"]
+        environment_data = inputs.get("environment_data", {})
+        max_iterations = inputs.get("max_iterations", self.max_debug_iterations)
+        
+        self.report_progress("Starting debug process", f"Goal: {goal[:80]}...")
+        
+        try:
+            # Execute debugging with explicit inputs
+            debug_result = self._debug_with_explicit_inputs(
+                goal=goal,
+                failed_test_report=failed_test_report,
+                code_context=code_context,
+                environment_data=environment_data,
+                max_iterations=max_iterations,
+                global_context=global_context
+            )
+            
+            if debug_result["success"]:
+                return self.create_result(
+                    success=True,
+                    message=f"Successfully debugged issue: {debug_result['solution_applied']}",
+                    outputs={
+                        "solution_applied": debug_result["solution_applied"],
+                        "modified_files": debug_result.get("modified_files", []),
+                        "iterations_used": debug_result["iterations_used"],
+                        "root_cause": debug_result.get("root_cause", "Unknown"),
+                        "validation_passed": debug_result.get("validation_passed", False)
+                    }
+                )
+            else:
+                return self.create_result(
+                    success=False,
+                    message=f"Debugging failed after {debug_result['iterations_used']} iterations",
+                    outputs={
+                        "iterations_used": debug_result["iterations_used"],
+                        "attempted_solutions": debug_result.get("attempted_solutions", []),
+                        "final_error": debug_result.get("final_error", "Unknown error")
+                    },
+                    error_details={
+                        "debug_failed": True,
+                        "iterations_exhausted": debug_result["iterations_used"] >= max_iterations
+                    }
+                )
+                
+        except Exception as e:
+            error_msg = f"DebuggingAgent execution error: {e}"
+            logger.error(error_msg, exc_info=True)
+            return self.create_result(
+                success=False,
+                message=error_msg,
+                error_details={"exception": str(e), "exception_type": type(e).__name__}
+            )
+    
+    def _debug_with_explicit_inputs(self, goal: str, failed_test_report: Dict[str, Any], 
+                                   code_context: str, environment_data: Dict[str, Any],
+                                   max_iterations: int, global_context: GlobalContext) -> Dict[str, Any]:
+        """
+        Execute debugging process with explicit inputs (no artifact hunting).
+        
+        Returns:
+            Dictionary with debugging results and metadata
+        """
+        self.report_thinking(f"Starting debugging with {max_iterations} max iterations")
+        
+        for iteration in range(max_iterations):
+            logger.info(f"--- Debugging Iteration {iteration + 1}/{max_iterations} ---")
+            self.report_progress(f"Debug iteration {iteration + 1}/{max_iterations}", "Analyzing and attempting fix")
+            
+            try:
+                # Phase 1: Gather evidence (using ToolingAgent if available)
+                evidence = self._gather_evidence_direct(failed_test_report, code_context, environment_data, global_context)
+                
+                # Phase 2: Analyze and hypothesize
+                hypothesis = self._analyze_and_hypothesize_direct(evidence, failed_test_report, code_context)
+                
+                # Phase 3: Apply fix (using ToolingAgent)
+                fix_result = self._apply_fix_direct(hypothesis, global_context)
+                
+                # Phase 4: Validate fix
+                validation_result = self._validate_fix_direct(global_context)
+                
+                if validation_result["success"]:
+                    logger.info(f"✅ Debugging succeeded after {iteration + 1} iterations")
+                    return {
+                        "success": True,
+                        "iterations_used": iteration + 1,
+                        "solution_applied": hypothesis.get("recommended_strategy", "Unknown solution"),
+                        "modified_files": fix_result.get("modified_files", []),
+                        "root_cause": hypothesis.get("primary_hypothesis", "Unknown"),
+                        "validation_passed": True
+                    }
+                else:
+                    logger.warning(f"❌ Fix attempt {iteration + 1} failed: {validation_result.get('message', 'Unknown error')}")
+                    continue
+                    
+            except Exception as e:
+                logger.error(f"Debugging iteration {iteration + 1} failed with exception: {e}")
+                continue
+        
+        # All iterations exhausted
+        return {
+            "success": False,
+            "iterations_used": max_iterations,
+            "final_error": "Maximum debugging iterations reached without successful fix"
+        }
+    
+    def _gather_evidence_direct(self, failed_test_report: Dict[str, Any], code_context: str, 
+                               environment_data: Dict[str, Any], global_context: GlobalContext) -> Dict[str, Any]:
+        """
+        Gather evidence using direct function calls to ToolingAgent (no artifact hunting).
+        """
+        self.report_thinking("Gathering evidence with direct ToolingAgent calls")
+        
+        evidence = {
+            "initial_failure": failed_test_report,
+            "code_context": code_context,
+            "environment_data": environment_data,
+            "diagnostic_output": {}
+        }
+        
+        # Call ToolingAgent directly if available
+        if "ToolingAgent" in self.agent_registry:
+            tooling_agent = self.agent_registry["ToolingAgent"]
+            
+            # Direct function call with explicit inputs
+            diagnostic_result = self.call_agent_v2(
+                target_agent=tooling_agent,
+                goal="Gather diagnostic evidence for debugging",
+                inputs={
+                    "commands": [
+                        get_python_version_command(),
+                        get_pip_list_command(),
+                        "ls -la",
+                        "pytest --version",
+                        "git status --porcelain"
+                    ],
+                    "purpose": "Gather comprehensive debugging evidence",
+                    "timeout": 60
+                },
+                global_context=global_context
+            )
+            
+            if diagnostic_result.success:
+                evidence["diagnostic_output"] = diagnostic_result.outputs
+                self.report_progress("Evidence gathered", f"Diagnostic commands executed successfully")
+            else:
+                logger.warning(f"Diagnostic evidence gathering failed: {diagnostic_result.message}")
+        
+        return evidence
+    
+    def _analyze_and_hypothesize_direct(self, evidence: Dict[str, Any], failed_test_report: Dict[str, Any], 
+                                       code_context: str) -> Dict[str, Any]:
+        """
+        Analyze evidence and generate hypothesis using direct data (no artifact hunting).
+        """
+        self.report_thinking("Analyzing evidence and generating hypothesis with LLM")
+        
+        try:
+            # Build comprehensive analysis prompt with direct data
+            analysis_prompt = f"""
+            You are an expert debugging agent analyzing a system failure. Based on the evidence below, 
+            provide a structured analysis with hypotheses and recommended fix strategy.
+
+            EVIDENCE:
+            Failed Test Report: {json.dumps(failed_test_report, indent=2)}
+            Code Context: {code_context[:1000]}...
+            Diagnostic Output: {json.dumps(evidence.get('diagnostic_output', {}), indent=2)}
+
+            Your analysis must be a valid JSON object with this structure:
+            {{
+                "root_cause_analysis": "Detailed explanation of what went wrong and why",
+                "primary_hypothesis": "Most likely cause of the issue",
+                "alternative_hypotheses": ["other possible causes"],
+                "confidence_level": "high|medium|low",
+                "error_category": "environment|dependencies|code|configuration|system",
+                "solution_type": "SURGICAL|DESIGN_CHANGE",
+                "complexity_assessment": "simple|moderate|complex",
+                "recommended_strategy": "Specific approach to fix the issue",
+                "risk_assessment": "Potential risks and side effects of the fix"
+            }}
+            """
+            
+            self.report_progress("AI analysis in progress", "Processing evidence with LLM for root cause analysis")
+            
+            response = self.llm_client.invoke(analysis_prompt)
+            hypothesis = json.loads(response)
+            
+            logger.info(f"Generated hypothesis: {hypothesis.get('primary_hypothesis', 'Unknown')}")
+            self.report_progress("Hypothesis generated", f"Root cause: {hypothesis.get('primary_hypothesis', 'Unknown')[:60]}...")
+            
+            return hypothesis
+            
+        except Exception as e:
+            logger.error(f"Hypothesis generation failed: {e}")
+            # Fallback basic hypothesis
+            return {
+                "root_cause_analysis": f"Analysis failed due to: {e}",
+                "primary_hypothesis": "Unknown issue requiring manual investigation",
+                "solution_type": "DESIGN_CHANGE",
+                "complexity_assessment": "complex",
+                "recommended_strategy": "Manual debugging required"
+            }
+    
+    def _apply_fix_direct(self, hypothesis: Dict[str, Any], global_context: GlobalContext) -> Dict[str, Any]:
+        """
+        Apply fix using direct function calls (no artifact hunting).
+        """
+        solution_type = hypothesis.get("solution_type", "DESIGN_CHANGE")
+        recommended_strategy = hypothesis.get("recommended_strategy", "Apply manual fix")
+        
+        self.report_thinking(f"Applying {solution_type} fix strategy using direct agent calls")
+        
+        # For now, simulate applying a fix (in full implementation, would call ScriptExecutorAgent or CodeGenerationAgent)
+        if "ToolingAgent" in self.agent_registry:
+            # Apply simple fixes via ToolingAgent
+            tooling_agent = self.agent_registry["ToolingAgent"]
+            
+            fix_result = self.call_agent_v2(
+                target_agent=tooling_agent,
+                goal=f"Apply fix: {recommended_strategy}",
+                inputs={
+                    "commands": [
+                        f"echo 'Applying fix: {recommended_strategy}'"
+                    ],
+                    "purpose": f"Apply {solution_type} fix for debugging"
+                },
+                global_context=global_context
+            )
+            
+            if fix_result.success:
+                return {
+                    "success": True,
+                    "modified_files": [],  # Would contain actual modified files
+                    "fix_applied": recommended_strategy
+                }
+        
+        # Fallback: manual fix recommendations
+        return {
+            "success": True,
+            "modified_files": [],
+            "fix_applied": "Manual fix recommendations created"
+        }
+    
+    def _validate_fix_direct(self, global_context: GlobalContext) -> Dict[str, Any]:
+        """
+        Validate fix using direct TestRunnerAgent call (no artifact hunting).
+        """
+        self.report_thinking("Validating fix using direct TestRunnerAgent call")
+        
+        if "TestRunnerAgent" in self.agent_registry:
+            test_runner = self.agent_registry["TestRunnerAgent"]
+            
+            # Direct function call for validation
+            validation_result = self.call_agent_v2(
+                target_agent=test_runner,
+                goal="Validate that debugging fix resolved the issue",
+                inputs={
+                    "test_mode": "validation",
+                    "run_all_tests": True,
+                    "validation_mode": True  # Prevent circular calls
+                },
+                global_context=global_context
+            )
+            
+            return {
+                "success": validation_result.success,
+                "message": validation_result.message,
+                "test_results": validation_result.outputs
+            }
+        else:
+            # No test runner available
+            logger.warning("TestRunnerAgent not available for validation")
+            return {
+                "success": False,
+                "message": "Cannot validate - TestRunnerAgent not available"
+            }
 
     def _build_prompt(self, failed_test_report: Dict, code_context: str) -> str:
         """Constructs a detailed prompt to guide the LLM in debugging the code."""
@@ -193,8 +494,8 @@ class DebuggingAgent(BaseAgent):
             if "ToolingAgent" in self.agent_registry:
                 # Create structured diagnostic instruction for evidence gathering
                 diagnostic_commands = [
-                    "python --version",
-                    "pip list",
+                    get_python_version_command(),
+                    get_pip_list_command(),
                     "ls -la",
                     "pytest --version",
                     "git status --porcelain"

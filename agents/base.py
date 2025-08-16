@@ -1,5 +1,6 @@
 # agents/base.py
 import logging
+import uuid
 import concurrent.futures
 from abc import ABC, abstractmethod
 from typing import List, Callable, Any, Dict, TYPE_CHECKING
@@ -10,7 +11,7 @@ if TYPE_CHECKING:
 # The base agent needs to know the "shape" of the data it will receive and return.
 # By importing these types, we can use them in method signatures for clarity and
 # type-checking, which is excellent for debugging.
-from core.models import AgentResponse, TaskNode
+from core.models import AgentResponse, AgentResult, AgentExecutionError, TaskNode
 from core.context import GlobalContext
 
 # Get a logger instance for this module.
@@ -56,25 +57,71 @@ class BaseAgent(ABC):
     @abstractmethod
     def execute(self, goal: str, context: GlobalContext, current_task: TaskNode) -> AgentResponse:
         """
-        The primary method where the agent performs its specialized task.
-
-        This abstract method MUST be implemented by all concrete agent subclasses.
-        It should be designed to be as stateless as possible, relying only on the
-        provided context for its inputs and writing all its outputs back into the
-        context.
-
-        Args:
-            goal: The specific sub-problem or objective this agent needs to solve for the current task.
-            context: The shared GlobalContext object, providing access to the workspace,
-                     artifacts, and the overall plan.
-            current_task: The TaskNode object that the agent is currently executing. This gives
-                          the agent awareness of its own task ID, dependencies, and expected outputs.
-
-        Returns:
-            An AgentResponse object detailing the outcome of its execution. The `success`
-            field is critical for the Orchestrator to determine the next step.
+        LEGACY: The primary method where the agent performs its specialized task.
+        
+        This is kept for backward compatibility. New agents should implement execute_v2.
         """
         pass
+    
+    def execute_v2(self, goal: str, inputs: Dict[str, Any], global_context: GlobalContext) -> AgentResult:
+        """
+        NEW FUNCTION-CALL INTERFACE: Execute agent with explicit inputs and outputs.
+        
+        This method provides function-call semantics with clear contracts:
+        - Explicit inputs (no artifact hunting)
+        - Explicit outputs (no global context pollution) 
+        - Fail-fast validation
+        - Instance isolation
+        
+        Args:
+            goal: Clear problem statement - what to accomplish
+            inputs: Dictionary of explicit inputs (validated against required_inputs())
+            global_context: Shared workspace context for file operations only
+            
+        Returns:
+            AgentResult with structured outputs and execution tracking
+        """
+        # Default implementation: create a TaskNode and call legacy execute()
+        logger.warning(f"{self.name} using legacy execute() via execute_v2() wrapper")
+        
+        # Create a temporary TaskNode for legacy compatibility
+        from core.models import TaskNode
+        legacy_task = TaskNode(
+            goal=goal,
+            assigned_agent=self.name,
+            task_id=f"legacy_{uuid.uuid4().hex[:8]}"
+        )
+        
+        # Call legacy execute method
+        legacy_response = self.execute(goal, global_context, legacy_task)
+        
+        # Convert legacy AgentResponse to new AgentResult
+        return AgentResult(
+            success=legacy_response.success,
+            message=legacy_response.message,
+            outputs={
+                "artifacts_generated": legacy_response.artifacts_generated,
+                "legacy_mode": True
+            }
+        )
+    
+    def required_inputs(self) -> List[str]:
+        """
+        Declare required inputs for this agent - fail fast if missing.
+        
+        Returns:
+            List of input keys that MUST be present in inputs dict
+        """
+        return []  # Default: no required inputs
+    
+    def optional_inputs(self) -> List[str]:
+        """
+        Declare optional inputs for documentation and validation.
+        
+        Returns:
+            List of input keys that MAY be present in inputs dict  
+        """
+        return []
 
     def get_capabilities(self) -> dict:
         """
@@ -82,7 +129,130 @@ class BaseAgent(ABC):
         This is a concrete method available to all subclasses. It's used by the
         PlannerAgent to understand the tools at its disposal.
         """
-        return {"name": self.name, "description": self.description}
+        return {
+            "name": self.name, 
+            "description": self.description,
+            "required_inputs": self.required_inputs(),
+            "optional_inputs": self.optional_inputs()
+        }
+    
+    # === FUNCTION-CALL SEMANTICS HELPERS ===
+    
+    def validate_inputs(self, inputs: Dict[str, Any]) -> None:
+        """
+        Fail-fast validation of required inputs.
+        Call this at the start of execute_v2() to ensure all required data is present.
+        
+        Args:
+            inputs: Input dictionary to validate
+            
+        Raises:
+            AgentExecutionError: If required inputs are missing
+        """
+        required = self.required_inputs()
+        missing = [inp for inp in required if inp not in inputs]
+        
+        if missing:
+            error_msg = f"{self.name} execution failed: missing required inputs {missing}. Required: {required}"
+            logger.error(error_msg)
+            raise AgentExecutionError(error_msg)
+        
+        # Log successful validation
+        logger.info(f"{self.name} input validation passed: {len(inputs)} inputs provided, {len(required)} required")
+    
+    def call_agent_v2(self, target_agent: 'BaseAgent', goal: str, inputs: Dict[str, Any], 
+                     global_context: GlobalContext) -> AgentResult:
+        """
+        Call another agent with function-call semantics.
+        This is the new standard way for agents to communicate.
+        
+        Args:
+            target_agent: The agent to call
+            goal: Clear problem statement for the target agent
+            inputs: Explicit inputs dictionary
+            global_context: Shared workspace context
+            
+        Returns:
+            AgentResult with structured outputs
+        """
+        import time
+        start_time = time.time()
+        
+        # Generate execution ID for tracking
+        execution_id = f"{target_agent.name}_{uuid.uuid4().hex[:8]}"
+        
+        # Log the function call for transparency
+        logger.info(f"🔗 {self.name} calling {target_agent.name}")
+        logger.info(f"   Goal: {goal[:80]}{'...' if len(goal) > 80 else ''}")
+        logger.info(f"   Inputs: {list(inputs.keys())}")
+        
+        self.report_progress(f"Calling {target_agent.name}", f"Goal: {goal[:60]}...")
+        
+        # Transfer progress tracker if both agents support it
+        if hasattr(self, 'progress_tracker') and hasattr(target_agent, 'set_progress_tracker'):
+            if self.progress_tracker:
+                target_agent.set_progress_tracker(self.progress_tracker, execution_id)
+        
+        try:
+            # Execute with function-call semantics
+            result = target_agent.execute_v2(goal, inputs, global_context)
+            
+            # Ensure execution ID is set
+            result.execution_id = execution_id
+            result.duration_seconds = time.time() - start_time
+            
+            # Log result for transparency
+            status = "✅ SUCCESS" if result.success else "❌ FAILED"
+            logger.info(f"{status}: {target_agent.name} execution completed")
+            logger.info(f"   Duration: {result.duration_seconds:.2f}s")
+            logger.info(f"   Outputs: {list(result.outputs.keys())}")
+            
+            return result
+            
+        except AgentExecutionError as e:
+            # Expected validation error
+            error_result = AgentResult(
+                success=False,
+                message=f"{target_agent.name} validation failed: {e}",
+                execution_id=execution_id,
+                duration_seconds=time.time() - start_time,
+                error_details={"error_type": "validation_error", "details": str(e)}
+            )
+            logger.error(f"❌ VALIDATION ERROR: {target_agent.name} - {e}")
+            return error_result
+            
+        except Exception as e:
+            # Unexpected execution error
+            error_result = AgentResult(
+                success=False,
+                message=f"{target_agent.name} execution failed: {e}",
+                execution_id=execution_id,
+                duration_seconds=time.time() - start_time,
+                error_details={"error_type": "execution_error", "details": str(e), "exception": type(e).__name__}
+            )
+            logger.error(f"❌ EXECUTION ERROR: {target_agent.name} - {e}", exc_info=True)
+            return error_result
+    
+    def create_result(self, success: bool, message: str, outputs: Dict[str, Any] = None, 
+                     error_details: Dict[str, Any] = None) -> AgentResult:
+        """
+        Helper method to create standardized AgentResult instances.
+        
+        Args:
+            success: Whether execution succeeded
+            message: Human-readable result message
+            outputs: Structured outputs dictionary
+            error_details: Error details if execution failed
+            
+        Returns:
+            Standardized AgentResult
+        """
+        return AgentResult(
+            success=success,
+            message=message,
+            outputs=outputs or {},
+            error_details=error_details
+        )
     
     def set_progress_tracker(self, progress_tracker, task_id: str):
         """

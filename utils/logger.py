@@ -4,7 +4,7 @@ import logging.config
 import os
 from typing import Dict, Any
 
-def setup_logger(log_dir: str = "logs", default_level: int = logging.INFO) -> None:
+def setup_logger(log_dir: str = "logs", default_level: int = logging.INFO, suppress_console_logs: bool = False) -> None:
     """
     Configures a centralized logger for the entire Sovereign Agent Collective system.
 
@@ -23,11 +23,16 @@ def setup_logger(log_dir: str = "logs", default_level: int = logging.INFO) -> No
       making it easy to trace the flow of execution.
     - **Configurable**: The logging level can be set globally. For production, you
       might use INFO, while for development, DEBUG would be more appropriate.
+    - **Console Suppression**: The suppress_console_logs flag allows disabling
+      console output for logging messages while preserving file logging and UI
+      transparency messages (progress reports, thinking logs, etc.).
 
     Args:
         log_dir: The directory where log files will be stored. It will be created
                  if it does not exist.
         default_level: The default logging level for the root logger.
+        suppress_console_logs: If True, disables console logging while keeping file logging.
+                              UI transparency messages (progress/thinking reports) are unaffected.
     """
     if not os.path.exists(log_dir):
         os.makedirs(log_dir)
@@ -35,6 +40,11 @@ def setup_logger(log_dir: str = "logs", default_level: int = logging.INFO) -> No
     log_file_path = os.path.join(log_dir, "mission.log")
 
     # Dictionary-based configuration provides a clear and extensible way to set up logging.
+    # Build handlers list conditionally based on suppress_console_logs flag
+    handlers = ["rotating_file"]  # Always include file logging
+    if not suppress_console_logs:
+        handlers.append("console")  # Add console logging only if not suppressed
+    
     LOGGING_CONFIG: Dict[str, Any] = {
         "version": 1,
         "disable_existing_loggers": False,
@@ -64,7 +74,7 @@ def setup_logger(log_dir: str = "logs", default_level: int = logging.INFO) -> No
         "loggers": {
             # Root logger: catches all logs from any module.
             "": {
-                "handlers": ["console", "rotating_file"],
+                "handlers": handlers,  # Use the conditionally built handlers list
                 "level": default_level,
                 "propagate": False, # Prevents the root logger from passing messages to its own handlers again
             },
@@ -78,7 +88,12 @@ def setup_logger(log_dir: str = "logs", default_level: int = logging.INFO) -> No
     }
 
     logging.config.dictConfig(LOGGING_CONFIG)
-    logging.info("Logger configured successfully. Logging to console and %s", log_file_path)
+    
+    # Log the configuration status (this will respect the suppress_console_logs setting)
+    if suppress_console_logs:
+        logging.info("Logger configured successfully. Console logging suppressed, logging to %s only", log_file_path)
+    else:
+        logging.info("Logger configured successfully. Logging to console and %s", log_file_path)
 
 
 # --- Self-Testing Block ---

@@ -4,11 +4,12 @@ import logging
 import subprocess
 import sys
 from pathlib import Path
+from typing import Dict, Any, List
 
 # Foundational dependencies
 from .base import BaseAgent
 from core.context import GlobalContext
-from core.models import AgentResponse, TaskNode
+from core.models import AgentResponse, AgentResult, AgentExecutionError, TaskNode
 
 # Get a logger instance for this module
 logger = logging.getLogger(__name__)
@@ -26,6 +27,269 @@ class TestRunnerAgent(BaseAgent):
             description="Executes test suites using pytest and reports structured results."
         )
         self.agent_registry = agent_registry or {}
+    
+    # === FUNCTION-CALL INTERFACE ===
+    
+    def required_inputs(self) -> List[str]:
+        """Required inputs for TestRunnerAgent execution."""
+        return []  # Can run independently without required inputs
+    
+    def optional_inputs(self) -> List[str]:
+        """Optional inputs for TestRunnerAgent execution."""
+        return ["test_mode", "run_all_tests", "specific_test_files", "existing_test_report", "validation_mode"]
+    
+    def execute_v2(self, goal: str, inputs: Dict[str, Any], global_context: GlobalContext) -> AgentResult:
+        """
+        NEW INTERFACE: Execute tests with explicit inputs/outputs.
+        
+        This replaces the artifact hunting with direct test execution and result reporting.
+        """
+        logger.info(f"TestRunnerAgent executing with function-call interface: '{goal}'")
+        
+        # Fail-fast validation (none required, but validate what's provided)
+        self.validate_inputs(inputs)
+        
+        # Extract explicit inputs
+        test_mode = inputs.get("test_mode", "full")
+        run_all_tests = inputs.get("run_all_tests", True)
+        specific_test_files = inputs.get("specific_test_files", [])
+        existing_test_report = inputs.get("existing_test_report")
+        validation_mode = inputs.get("validation_mode", False)
+        
+        self.report_progress("Starting test execution", f"Mode: {test_mode}, Goal: {goal[:60]}...")
+        
+        try:
+            # Execute tests with explicit parameters
+            if existing_test_report:
+                # Interpret existing test report
+                test_result = self._interpret_test_report_direct(existing_test_report)
+            else:
+                # Run tests independently
+                test_result = self._run_tests_direct(
+                    test_mode=test_mode,
+                    run_all_tests=run_all_tests,
+                    specific_test_files=specific_test_files,
+                    global_context=global_context
+                )
+            
+            # Handle test failures with direct DebuggingAgent call (but not if we're already in validation mode)
+            if not test_result["success"] and "DebuggingAgent" in self.agent_registry and not validation_mode:
+                self.report_progress("Tests failed, calling debugger", f"Failures: {test_result['failed_count']}")
+                
+                # Direct function call to DebuggingAgent
+                debug_result = self.call_agent_v2(
+                    target_agent=self.agent_registry["DebuggingAgent"],
+                    goal=f"Debug test failures: {test_result['failure_summary']}",
+                    inputs={
+                        "failed_test_report": test_result["failed_test_report"],
+                        "code_context": test_result.get("code_context", ""),
+                        "environment_data": test_result.get("environment_data", {})
+                    },
+                    global_context=global_context
+                )
+                
+                # Include debug results in output
+                test_result["debug_result"] = debug_result.outputs if debug_result.success else {"debug_failed": debug_result.message}
+            elif not test_result["success"] and validation_mode:
+                self.report_progress("Tests failed in validation mode", "Skipping DebuggingAgent call to prevent circular calls")
+            
+            # Return structured result
+            if test_result["success"]:
+                return self.create_result(
+                    success=True,
+                    message=f"All tests passed: {test_result['passed_count']}/{test_result['total_count']} tests successful",
+                    outputs={
+                        "test_summary": {
+                            "total_tests": test_result["total_count"],
+                            "passed_tests": test_result["passed_count"],
+                            "failed_tests": test_result["failed_count"],
+                            "test_mode": test_mode
+                        },
+                        "test_results": test_result["detailed_results"],
+                        "execution_duration": test_result["duration"],
+                        "all_tests_passed": True
+                    }
+                )
+            else:
+                return self.create_result(
+                    success=False,
+                    message=f"Tests failed: {test_result['failed_count']}/{test_result['total_count']} tests failed",
+                    outputs={
+                        "test_summary": {
+                            "total_tests": test_result["total_count"],
+                            "passed_tests": test_result["passed_count"],
+                            "failed_tests": test_result["failed_count"],
+                            "test_mode": test_mode
+                        },
+                        "failed_test_report": test_result["failed_test_report"],
+                        "test_results": test_result["detailed_results"],
+                        "debug_result": test_result.get("debug_result"),
+                        "all_tests_passed": False
+                    },
+                    error_details={
+                        "test_failures": test_result["failed_tests"],
+                        "failure_summary": test_result["failure_summary"]
+                    }
+                )
+                
+        except Exception as e:
+            error_msg = f"TestRunnerAgent execution error: {e}"
+            logger.error(error_msg, exc_info=True)
+            return self.create_result(
+                success=False,
+                message=error_msg,
+                error_details={"exception": str(e), "exception_type": type(e).__name__}
+            )
+    
+    def _interpret_test_report_direct(self, test_report: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Interpret an existing test report with direct data (no artifact hunting).
+        """
+        self.report_progress("Interpreting test report", "Analyzing provided test results")
+        
+        try:
+            summary = test_report.get("summary", {})
+            total_tests = summary.get("total", 0)
+            failed_tests = summary.get("failed", 0)
+            passed_tests = total_tests - failed_tests
+            
+            return {
+                "success": failed_tests == 0,
+                "total_count": total_tests,
+                "passed_count": passed_tests,
+                "failed_count": failed_tests,
+                "failed_test_report": test_report if failed_tests > 0 else {},
+                "detailed_results": test_report,
+                "failure_summary": f"{failed_tests} failed tests" if failed_tests > 0 else "All tests passed",
+                "failed_tests": self._extract_failed_test_names(test_report),
+                "duration": 0  # Not available from report
+            }
+            
+        except Exception as e:
+            logger.error(f"Failed to interpret test report: {e}")
+            return {
+                "success": False,
+                "total_count": 0,
+                "passed_count": 0,
+                "failed_count": 1,
+                "failed_test_report": {"error": "report_parsing_failed", "details": str(e)},
+                "failure_summary": f"Test report parsing failed: {e}",
+                "failed_tests": ["report_parsing"],
+                "detailed_results": test_report,
+                "duration": 0
+            }
+    
+    def _run_tests_direct(self, test_mode: str, run_all_tests: bool, specific_test_files: List[str], 
+                         global_context: GlobalContext) -> Dict[str, Any]:
+        """
+        Run tests directly with explicit parameters (no artifact hunting).
+        """
+        import time
+        start_time = time.time()
+        
+        workspace_path = Path(global_context.workspace_path)
+        self.report_progress("Setting up test environment", f"Mode: {test_mode} in {workspace_path}")
+        
+        # Set up test environment
+        env_result = self._setup_test_environment(workspace_path)
+        if not env_result["success"]:
+            return {
+                "success": False,
+                "total_count": 0,
+                "passed_count": 0,
+                "failed_count": 1,
+                "failed_test_report": {"error": "environment_setup_failed", "details": env_result["message"]},
+                "failure_summary": f"Test environment setup failed: {env_result['message']}",
+                "failed_tests": ["environment_setup"],
+                "detailed_results": env_result,
+                "duration": time.time() - start_time
+            }
+        
+        # Discover test files
+        if specific_test_files:
+            test_files = [Path(f) for f in specific_test_files if Path(f).exists()]
+        else:
+            test_files = self._discover_test_files(workspace_path)
+        
+        if not test_files:
+            return {
+                "success": True,
+                "total_count": 0,
+                "passed_count": 0,
+                "failed_count": 0,
+                "failed_test_report": {},
+                "failure_summary": "No test files found",
+                "failed_tests": [],
+                "detailed_results": {"message": "No test files found"},
+                "duration": time.time() - start_time
+            }
+        
+        logger.info(f"Running {len(test_files)} test files in {test_mode} mode")
+        self.report_progress(f"Running {len(test_files)} test files", f"Test files: {', '.join([f.name for f in test_files[:3]])}...")
+        
+        # Execute tests
+        results = self._run_with_pytest(workspace_path, test_files)
+        if results is None:
+            results = self._run_individual_tests(test_files)
+        
+        # Aggregate results
+        total_test_functions = sum(result.get('test_count', 1) for result in results)
+        total_passed = sum(result.get('passed_count', 1 if result['success'] else 0) for result in results)
+        total_failed = sum(result.get('failed_count', 0 if result['success'] else 1) for result in results)
+        
+        failed_test_names = [result['file'] for result in results if not result['success']]
+        
+        duration = time.time() - start_time
+        
+        return {
+            "success": total_failed == 0,
+            "total_count": total_test_functions,
+            "passed_count": total_passed,
+            "failed_count": total_failed,
+            "failed_test_report": {
+                "summary": {"total": total_test_functions, "passed": total_passed, "failed": total_failed},
+                "details": results
+            } if total_failed > 0 else {},
+            "failure_summary": f"{total_failed} failed tests" if total_failed > 0 else "All tests passed",
+            "failed_tests": failed_test_names,
+            "detailed_results": results,
+            "duration": duration,
+            "code_context": self._extract_code_context_for_failures(results),
+            "environment_data": self._extract_environment_data()
+        }
+    
+    def _extract_failed_test_names(self, test_report: Dict[str, Any]) -> List[str]:
+        """Extract names of failed tests from test report."""
+        failed_tests = []
+        if "details" in test_report:
+            for result in test_report["details"]:
+                if isinstance(result, dict) and not result.get("success", True):
+                    failed_tests.append(result.get("file", "unknown_test"))
+        return failed_tests
+    
+    def _extract_code_context_for_failures(self, results: List[Dict[str, Any]]) -> str:
+        """Extract relevant code context for failed tests."""
+        context_lines = []
+        for result in results:
+            if not result.get("success", True):
+                file_path = result.get("file", "")
+                if file_path and Path(file_path).exists():
+                    try:
+                        content = Path(file_path).read_text()
+                        context_lines.append(f"=== {file_path} ===\n{content[:500]}...\n")
+                    except Exception as e:
+                        context_lines.append(f"=== {file_path} ===\nError reading file: {e}\n")
+        
+        return "\n".join(context_lines) if context_lines else "No code context available"
+    
+    def _extract_environment_data(self) -> Dict[str, Any]:
+        """Extract environment data for debugging context."""
+        import platform
+        return {
+            "platform": platform.platform(),
+            "python_version": sys.version,
+            "python_executable": sys.executable
+        }
 
     def execute(self, goal: str, context: GlobalContext, current_task: TaskNode) -> AgentResponse:
         logger.info(f"TestRunnerAgent executing with goal: '{goal}'")

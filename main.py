@@ -25,10 +25,7 @@ def main(args: List[str]) -> None:
     Args:
         args: A list of command-line arguments, typically from `sys.argv[1:]`.
     """
-    # 1. Setup application-wide logging.
-    setup_logger()
-
-    # 2. Parse command-line arguments.
+    # 1. Parse command-line arguments first to get the quiet-logs flag.
     parser = argparse.ArgumentParser(
         description="Sovereign Agent Collective: An autonomous software development agency."
     )
@@ -43,6 +40,11 @@ def main(args: List[str]) -> None:
         default=None,
         help="The directory path for the mission's workspace. If not specified, auto-generates a timestamped directory."
     )
+    parser.add_argument(
+        "--quiet-logs",
+        action="store_true",
+        help="Suppress console logging messages while preserving UI transparency/collaboration messages."
+    )
 
     # In a real application, you might add a verbosity flag
     # parser.add_argument('-v', '--verbose', action='store_true', help='Enable debug logging')
@@ -50,7 +52,11 @@ def main(args: List[str]) -> None:
     parsed_args = parser.parse_args(args)
     mission_goal = parsed_args.mission_goal
     workspace_path = parsed_args.workspace
+    quiet_logs = parsed_args.quiet_logs
 
+    # 1. Setup application-wide logging with optional console suppression.
+    setup_logger(suppress_console_logs=quiet_logs)
+    
     logger.info(f"Starting Sovereign Agent Collective with mission: '{mission_goal}'")
 
     try:

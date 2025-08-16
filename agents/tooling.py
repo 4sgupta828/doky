@@ -1,12 +1,12 @@
 # agents/tooling.py
 import logging
 import subprocess
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
 
 # Foundational dependencies
 from .base import BaseAgent
 from core.context import GlobalContext
-from core.models import AgentResponse, TaskNode
+from core.models import AgentResponse, AgentResult, AgentExecutionError, TaskNode
 from core.instruction_schemas import ToolingInstruction, ToolingExecutionResult
 
 # Get a logger instance for this module
@@ -26,6 +26,227 @@ class ToolingAgent(BaseAgent):
         )
         # A set of commands that are not allowed for safety reasons.
         self.disallowed_commands = {"rm", "mv", "dd", "mkfs", "shutdown", "reboot"}
+    
+    # === FUNCTION-CALL INTERFACE ===
+    
+    def required_inputs(self) -> List[str]:
+        """Required inputs for ToolingAgent execution."""
+        return ["commands", "purpose"]
+    
+    def optional_inputs(self) -> List[str]:
+        """Optional inputs for ToolingAgent execution."""
+        return ["working_directory", "timeout", "environment_vars", "safety_overrides", "ignore_errors"]
+    
+    def execute_v2(self, goal: str, inputs: Dict[str, Any], global_context: GlobalContext) -> AgentResult:
+        """
+        NEW INTERFACE: Execute tooling commands with explicit inputs/outputs.
+        
+        This replaces the complex structured instruction parsing with direct function calls.
+        """
+        logger.info(f"ToolingAgent executing with function-call interface: '{goal}'")
+        
+        # Fail-fast validation
+        self.validate_inputs(inputs)
+        
+        # Extract explicit inputs
+        commands = inputs["commands"]
+        purpose = inputs["purpose"]
+        working_directory = inputs.get("working_directory")
+        timeout = inputs.get("timeout", 120)
+        environment_vars = inputs.get("environment_vars")
+        safety_overrides = inputs.get("safety_overrides", [])
+        ignore_errors = inputs.get("ignore_errors", False)
+        
+        self.report_progress("Executing commands", f"Running {len(commands)} commands: {purpose}")
+        
+        try:
+            # Execute commands with explicit parameters
+            result = self._execute_commands_direct(
+                commands=commands,
+                purpose=purpose,
+                working_directory=working_directory or str(global_context.workspace.repo_path),
+                timeout=timeout,
+                environment_vars=environment_vars,
+                safety_overrides=safety_overrides,
+                ignore_errors=ignore_errors
+            )
+            
+            # Return structured result
+            if result["success"]:
+                self.report_progress("Commands completed", f"Successfully executed {len(result['commands_executed'])} commands")
+                return self.create_result(
+                    success=True,
+                    message=f"Successfully executed {len(commands)} commands for: {purpose}",
+                    outputs={
+                        "commands_executed": result["commands_executed"],
+                        "command_results": result["command_results"],
+                        "combined_output": result["combined_output"],
+                        "execution_summary": f"{len(result['commands_executed'])}/{len(commands)} commands completed",
+                        "duration_seconds": result["total_duration"]
+                    }
+                )
+            else:
+                self.report_progress("Commands failed", f"Failed commands: {len(result['failed_commands'])}")
+                return self.create_result(
+                    success=False,
+                    message=f"Command execution failed: {result['message']}",
+                    outputs={
+                        "commands_executed": result["commands_executed"],
+                        "failed_commands": result["failed_commands"],
+                        "combined_output": result["combined_output"]
+                    },
+                    error_details={
+                        "failed_commands": result["failed_commands"],
+                        "error_message": result["message"]
+                    }
+                )
+                
+        except Exception as e:
+            error_msg = f"ToolingAgent execution error: {e}"
+            logger.error(error_msg, exc_info=True)
+            return self.create_result(
+                success=False,
+                message=error_msg,
+                error_details={"exception": str(e), "exception_type": type(e).__name__}
+            )
+    
+    def _execute_commands_direct(self, commands: List[str], purpose: str, working_directory: str, 
+                                timeout: int, environment_vars: Optional[Dict[str, str]], 
+                                safety_overrides: List[str], ignore_errors: bool) -> Dict[str, Any]:
+        """
+        Execute commands directly with explicit parameters (no instruction parsing).
+        
+        Returns:
+            Dictionary with execution results and metadata
+        """
+        import time
+        start_time = time.time()
+        
+        commands_executed = []
+        command_results = []
+        failed_commands = []
+        combined_output = ""
+        
+        logger.info(f"Executing {len(commands)} commands for: {purpose}")
+        
+        # Set up environment if specified
+        env = None
+        if environment_vars:
+            import os
+            env = os.environ.copy()
+            env.update(environment_vars)
+        
+        # Execute each command in sequence
+        for i, command in enumerate(commands):
+            self.report_progress(f"Command {i+1}/{len(commands)}", f"{command[:50]}...")
+            
+            # Safety check with overrides
+            if not self._is_command_safe_with_overrides(command, safety_overrides):
+                failed_commands.append(command)
+                command_result = {
+                    "command": command,
+                    "success": False,
+                    "exit_code": -1,
+                    "stdout": "",
+                    "stderr": "Command blocked by safety check",
+                    "duration": 0
+                }
+                command_results.append(command_result)
+                combined_output += f"=== Command {i+1}: {command} ===\nSAFETY BLOCKED\n\n"
+                
+                if not ignore_errors:
+                    break
+                continue
+            
+            # Execute the command
+            command_start = time.time()
+            try:
+                result = subprocess.run(
+                    command,
+                    shell=True,
+                    capture_output=True,
+                    text=True,
+                    cwd=working_directory,
+                    timeout=timeout,
+                    env=env
+                )
+                
+                command_duration = time.time() - command_start
+                
+                command_result = {
+                    "command": command,
+                    "success": result.returncode == 0,
+                    "exit_code": result.returncode,
+                    "stdout": result.stdout,
+                    "stderr": result.stderr,
+                    "duration": command_duration
+                }
+                
+                commands_executed.append(command)
+                command_results.append(command_result)
+                combined_output += f"=== Command {i+1}: {command} ===\n"
+                combined_output += f"Exit code: {result.returncode}\n"
+                combined_output += f"STDOUT:\n{result.stdout}\n"
+                combined_output += f"STDERR:\n{result.stderr}\n\n"
+                
+                if result.returncode != 0:
+                    failed_commands.append(command)
+                    if not ignore_errors:
+                        logger.error(f"Command failed: {command} (exit code: {result.returncode})")
+                        break
+                
+            except subprocess.TimeoutExpired:
+                command_duration = time.time() - command_start
+                failed_commands.append(command)
+                command_result = {
+                    "command": command,
+                    "success": False,
+                    "exit_code": -2,
+                    "stdout": "",
+                    "stderr": f"Command timed out after {timeout} seconds",
+                    "duration": command_duration
+                }
+                command_results.append(command_result)
+                combined_output += f"=== Command {i+1}: {command} ===\nTIMEOUT after {timeout} seconds\n\n"
+                
+                if not ignore_errors:
+                    break
+                    
+            except Exception as e:
+                command_duration = time.time() - command_start
+                failed_commands.append(command)
+                command_result = {
+                    "command": command,
+                    "success": False,
+                    "exit_code": -3,
+                    "stdout": "",
+                    "stderr": f"Execution error: {e}",
+                    "duration": command_duration
+                }
+                command_results.append(command_result)
+                combined_output += f"=== Command {i+1}: {command} ===\nERROR: {e}\n\n"
+                
+                if not ignore_errors:
+                    break
+        
+        total_duration = time.time() - start_time
+        success = len(failed_commands) == 0
+        
+        # Create result message
+        if success:
+            message = f"Successfully executed {len(commands_executed)} commands for {purpose}"
+        else:
+            message = f"Failed {len(failed_commands)}/{len(commands)} commands: {', '.join(failed_commands[:3])}{'...' if len(failed_commands) > 3 else ''}"
+        
+        return {
+            "success": success,
+            "message": message,
+            "commands_executed": commands_executed,
+            "command_results": command_results,
+            "failed_commands": failed_commands,
+            "combined_output": combined_output,
+            "total_duration": total_duration
+        }
 
     def _is_command_safe(self, command: str) -> bool:
         """A simple safety check to prevent destructive commands."""

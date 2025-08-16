@@ -200,7 +200,7 @@ class CollaborationUI:
     def _display_artifact_content(self, artifact_key: str, content: Any):
         """Helper method to format and display artifact content."""
         print(f"\n   📄 {Style.BOLD}{Style.Fg.CODE}{artifact_key}:{Style.RESET}")
-        print(f"   {Style.Fg.MUTED}" + "─" * 76 + f"{Style.RESET}")
+        print(f"   " + "─" * 76)
         
         if isinstance(content, str):
             # For text content, display with proper indentation
@@ -222,19 +222,19 @@ class CollaborationUI:
             # For other types, show string representation
             print(f"   {str(content)[:500]}{'...' if len(str(content)) > 500 else ''}")
         
-        print(f"   {Style.Fg.MUTED}" + "─" * 76 + f"{Style.RESET}")
+        print(f"   " + "─" * 76)
 
     def display_agent_progress(self, agent_name: str, step: str, details: str = None):
         """Shows real-time progress updates during agent execution."""
         timestamp = time.strftime("%H:%M:%S")
-        print(f"\n🔄 [{Style.Fg.MUTED}{timestamp}{Style.RESET}] {Style.Fg.INFO}{agent_name}{Style.RESET}: {step}")
+        print(f"\n🔄 [{timestamp}] {agent_name}: {step}")
         if details:
-            print(f"   {Style.Fg.MUTED}└─ {details}{Style.RESET}")
+            print(f"   └─ {details}")
 
     def display_agent_thinking(self, agent_name: str, thought: str):
         """Shows the agent's reasoning or thought process."""
-        print(f"\n💭 {Style.Fg.CODE}{agent_name} thinking:{Style.RESET}")
-        print(f"   {Style.Fg.MUTED}\"{thought}\"{Style.RESET}")
+        print(f"\n💭 {agent_name} thinking:")
+        print(f"   \"{thought}\"")
 
     def display_intermediate_output(self, agent_name: str, output_type: str, content: Any, preview_lines: int = 10):
         """Shows intermediate outputs like generated code, specs, etc. with preview."""
@@ -257,41 +257,41 @@ class CollaborationUI:
     
     def _display_original_intermediate_output(self, agent_name: str, output_type: str, content: Any, preview_lines: int = 10):
         """Original intermediate output display method."""
-        print(f"\n📄 {Style.Fg.INFO}{agent_name}{Style.RESET} generated {Style.Fg.CODE}{output_type}{Style.RESET}:")
-        print(f"   {Style.Fg.MUTED}" + "─" * 76 + f"{Style.RESET}")
+        print(f"\n📄 {agent_name} generated {output_type}:")
+        print(f"   " + "─" * 76)
         
         if isinstance(content, str):
             lines = content.split('\n')
             for i, line in enumerate(lines[:preview_lines]):
-                print(f"   {Style.Fg.MUTED}{i+1:3}{Style.RESET} | {line}")
+                print(f"   {i+1:3} | {line}")
             if len(lines) > preview_lines:
-                print(f"   {Style.Fg.MUTED}... ({len(lines) - preview_lines} more lines){Style.RESET}")
+                print(f"   ... ({len(lines) - preview_lines} more lines)")
         else:
             print(f"   {str(content)[:300]}{'...' if len(str(content)) > 300 else ''}")
-        print(f"   {Style.Fg.MUTED}" + "─" * 76 + f"{Style.RESET}")
+        print(f"   " + "─" * 76)
     
     def display_code_snippet(self, agent_name: str, content: str, filename: str = "code"):
         """Displays a code snippet with syntax highlighting and line numbers."""
-        print(f"\n📝 {Style.Fg.INFO}{agent_name}{Style.RESET} generated {Style.Fg.CODE}{filename}{Style.RESET}:")
-        print(f"   {Style.Fg.MUTED}┌" + "─" * 76 + f"┐{Style.RESET}")
+        print(f"\n📝 {agent_name} generated {filename}:")
+        print(f"   ┌" + "─" * 76 + "┐")
         
         lines = content.split('\n')
         max_line_num_width = len(str(len(lines)))
         
         for i, line in enumerate(lines, 1):
             line_num = f"{i:>{max_line_num_width}}"
-            print(f"   {Style.Fg.MUTED}│{Style.RESET} {Style.Fg.MUTED}{line_num}{Style.RESET} │ {line}")
+            print(f"   │ {line_num} │ {line}")
         
-        print(f"   {Style.Fg.MUTED}└" + "─" * 76 + f"┘{Style.RESET}")
-        print(f"   {Style.Fg.MUTED}Lines: {len(lines)}{Style.RESET}")
+        print(f"   └" + "─" * 76 + "┘")
+        print(f"   Lines: {len(lines)}")
     
     def display_code_diff(self, agent_name: str, diff_data: dict):
         """Displays GitHub-style diff for code changes."""
-        print(f"\n🔄 {Style.Fg.INFO}{agent_name}{Style.RESET} generated {Style.Fg.CODE}code diff{Style.RESET}:")
+        print(f"\n🔄 {agent_name} generated code diff:")
         
         for file_path, changes in diff_data.items():
-            print(f"\n   {Style.Fg.CODE}📁 {file_path}{Style.RESET}")
-            print(f"   {Style.Fg.MUTED}──────────────────────────────────────────{Style.RESET}")
+            print(f"\n   📁 {file_path}")
+            print(f"   ──────────────────────────────────────────")
             
             if isinstance(changes, dict) and 'old' in changes and 'new' in changes:
                 old_lines = changes['old'].split('\n') if changes['old'] else []
@@ -301,18 +301,18 @@ class CollaborationUI:
                 self._display_simple_diff(old_lines, new_lines)
             elif isinstance(changes, str):
                 # New file
-                print(f"   {Style.Fg.SUCCESS}+++ New file{Style.RESET}")
+                print(f"   +++ New file")
                 lines = changes.split('\n')
                 for i, line in enumerate(lines, 1):
-                    print(f"   {Style.Fg.SUCCESS}+{i:3}{Style.RESET} │ {line}")
+                    print(f"   +{i:3} │ {line}")
     
     def display_code_files(self, agent_name: str, files_data: dict):
         """Displays multiple code files with syntax highlighting."""
-        print(f"\n📁 {Style.Fg.INFO}{agent_name}{Style.RESET} generated {Style.Fg.CODE}{len(files_data)} files{Style.RESET}:")
+        print(f"\n📁 {agent_name} generated {len(files_data)} files:")
         
         for file_path, content in files_data.items():
-            print(f"\n   {Style.Fg.CODE}📄 {file_path}{Style.RESET}")
-            print(f"   {Style.Fg.MUTED}┌" + "─" * 76 + f"┐{Style.RESET}")
+            print(f"\n   📄 {file_path}")
+            print(f"   ┌" + "─" * 76 + "┐")
             
             if isinstance(content, str):
                 lines = content.split('\n')
@@ -321,13 +321,13 @@ class CollaborationUI:
                 # Show first 20 lines of each file
                 for i, line in enumerate(lines[:20], 1):
                     line_num = f"{i:>{max_line_num_width}}"
-                    print(f"   {Style.Fg.MUTED}│{Style.RESET} {Style.Fg.MUTED}{line_num}{Style.RESET} │ {line}")
+                    print(f"   │ {line_num} │ {line}")
                 
                 if len(lines) > 20:
-                    print(f"   {Style.Fg.MUTED}│ ... ({len(lines) - 20} more lines) ...{Style.RESET}")
+                    print(f"   │ ... ({len(lines) - 20} more lines) ...")
                     
-            print(f"   {Style.Fg.MUTED}└" + "─" * 76 + f"┘{Style.RESET}")
-            print(f"   {Style.Fg.MUTED}Lines: {len(content.split('\n')) if isinstance(content, str) else 0}{Style.RESET}")
+            print(f"   └" + "─" * 76 + "┘")
+            print(f"   Lines: {len(content.split('\n')) if isinstance(content, str) else 0}")
     
     def _display_simple_diff(self, old_lines: list, new_lines: list):
         """Displays a simple unified diff between old and new lines."""
@@ -340,28 +340,19 @@ class CollaborationUI:
         ))
         
         for line in diff[3:]:  # Skip the diff header lines
-            if line.startswith('+++') or line.startswith('---'):
-                print(f"   {Style.Fg.MUTED}{line}{Style.RESET}")
-            elif line.startswith('@@'):
-                print(f"   {Style.Fg.INFO}{line}{Style.RESET}")
-            elif line.startswith('+'):
-                print(f"   {Style.Fg.SUCCESS}{line}{Style.RESET}")
-            elif line.startswith('-'):
-                print(f"   {Style.Fg.ERROR}{line}{Style.RESET}")
-            else:
-                print(f"   {Style.Fg.MUTED}{line}{Style.RESET}")
+            print(f"   {line}")
 
     def display_failure_analysis(self, agent_name: str, error: str, troubleshooting_steps: List[str] = None):
         """Shows detailed failure analysis with troubleshooting suggestions."""
         print(f"\n❌ {Style.Fg.ERROR}{Style.BOLD}{agent_name} FAILURE ANALYSIS{Style.RESET}")
-        print(f"   {Style.Fg.MUTED}" + "─" * 76 + f"{Style.RESET}")
+        print(f"   " + "─" * 76)
         print(f"   {Style.BOLD}Error:{Style.RESET} {error}")
         
         if troubleshooting_steps:
             print(f"\n   {Style.BOLD}Suggested Troubleshooting Steps:{Style.RESET}")
             for i, step in enumerate(troubleshooting_steps, 1):
                 print(f"   {Style.Fg.MUTED}{i}.{Style.RESET} {step}")
-        print(f"   {Style.Fg.MUTED}" + "─" * 76 + f"{Style.RESET}")
+        print(f"   " + "─" * 76)
 
     def display_direct_command_result(self, agent_name: str, response: AgentResponse, context: 'GlobalContext' = None):
         """Displays the formatted result of a single agent's execution."""
