@@ -23,20 +23,21 @@ class Style:
     RESET = "\033[0m"
     BOLD = "\033[1m"
     DIM = "\033[2m"
+    STRIKETHROUGH = "\033[9m"
     
     class Fg:
-        # Success states - softer green
+        # Success states - soft green
         SUCCESS = "\033[38;2;40;167;69m"    # GitHub green
-        # Info/progress - gentler blue  
+        # Info/progress - calm blue  
         INFO = "\033[38;2;88;166;255m"      # GitHub blue
-        # Warnings - softer amber
-        WARNING = "\033[38;2;251;188;5m"    # GitHub amber
+        # Warnings - amber (less jarring than yellow)
+        WARNING = "\033[38;2;251;188;5m"   # GitHub amber
         # Errors - muted red
-        ERROR = "\033[38;2;248;81;73m"      # GitHub red
-        # Secondary text - subtle gray
-        MUTED = "\033[38;2;150,150,150m"    # Adjusted for better visibility
-        # Code/output - softer purple
-        CODE = "\033[38;2;171;142;255m"     # GitHub purple
+        ERROR = "\033[38;2;248;81;73m"     # GitHub red
+        # Secondary text - soft gray
+        MUTED = "\033[38;2;106;115;125m"   # GitHub gray
+        # Code/output - purple accent
+        CODE = "\033[38;2;171;142;255m"    # GitHub purple
 
 class CollaborationUI:
     """
@@ -85,7 +86,7 @@ class CollaborationUI:
             print(f"\n✅ {Style.Fg.SUCCESS}{Style.BOLD}Completed Tasks{Style.RESET}")
             for task in sorted(tasks_by_status["completed"], key=lambda t: t.task_id):
                 status_text = "OBSOLETE" if task.status == "obsolete" else "SUCCESS"
-                print(f"   - {Style.Fg.MUTED}{Style.DIM}[{status_text}] {task.task_id}: {task.goal}{Style.RESET}")
+                print(f"   - {Style.Fg.MUTED}{Style.STRIKETHROUGH}[{status_text}] {task.task_id}: {task.goal}{Style.RESET}")
 
         if tasks_by_status["running"]:
             print(f"\n🔄 {Style.Fg.INFO}{Style.BOLD}In Progress{Style.RESET}")
@@ -226,10 +227,9 @@ class CollaborationUI:
     def display_agent_progress(self, agent_name: str, step: str, details: str = None):
         """Shows real-time progress updates during agent execution."""
         timestamp = time.strftime("%H:%M:%S")
-        # Removed highlighting, using softer colors and clearer structure
-        print(f"\n• {Style.Fg.MUTED}{timestamp}{Style.RESET} {Style.Fg.INFO}{agent_name}{Style.RESET}: {step}")
+        print(f"\n🔄 [{Style.Fg.MUTED}{timestamp}{Style.RESET}] {Style.Fg.INFO}{agent_name}{Style.RESET}: {step}")
         if details:
-            print(f"  {Style.Fg.MUTED}↳ {details}{Style.RESET}")
+            print(f"   {Style.Fg.MUTED}└─ {details}{Style.RESET}")
 
     def display_agent_thinking(self, agent_name: str, thought: str):
         """Shows the agent's reasoning or thought process."""
@@ -413,7 +413,7 @@ if __name__ == "__main__":
             output = "\n".join([call.args[0] for call in mock_print.call_args_list])
 
             self.assertIn("Completed Tasks", output)
-            self.assertIn(Style.DIM, output) # Check for dim
+            self.assertIn(Style.STRIKETHROUGH, output) # Check for strikethrough
             self.assertIn("[SUCCESS]", output)
             
             self.assertIn("In Progress", output)
