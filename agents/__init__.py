@@ -28,6 +28,19 @@ from .execution_validator import ExecutionValidatorAgent
 from .master_intelligence import MasterIntelligenceAgent
 from .workflow_adapter import WorkflowAdapterAgent
 
+# New Agent Architecture - Aligned with 21-Agent Plan
+# Analysis Tier (Read-only)
+from .code_analysis import CodeAnalysisAgent
+from .test_analysis import TestAnalysisAgent
+
+# Specialized Tier (Write-only)
+from .code_modifier import CodeModifierAgent
+from .test_modifier import TestModifierAgent
+
+# Infrastructure Tier (System operations)
+from .environment_modifier import EnvironmentModifierAgent
+from .process_executor import ProcessExecutorAgent
+
 # Get a logger instance for this module.
 logger = logging.getLogger(__name__)
 
@@ -39,6 +52,18 @@ AGENT_REGISTRY: Dict[str, Type[BaseAgent]] = {
     # Intelligence Layer - Phase 1 Implementation
     "MasterIntelligenceAgent": MasterIntelligenceAgent,
     "WorkflowAdapterAgent": WorkflowAdapterAgent,
+
+    # Analysis Tier - Read-only analysis agents
+    "CodeAnalysisAgent": CodeAnalysisAgent,
+    "TestAnalysisAgent": TestAnalysisAgent,
+    
+    # Specialized Tier - Write-only modification agents
+    "CodeModifierAgent": CodeModifierAgent,
+    "TestModifierAgent": TestModifierAgent,
+    
+    # Infrastructure Tier - System operation agents
+    "EnvironmentModifierAgent": EnvironmentModifierAgent,
+    "ProcessExecutorAgent": ProcessExecutorAgent,
 
     # Foundational Agents
     "PlannerAgent": PlannerAgent,
@@ -73,6 +98,15 @@ AGENT_ALIASES: Dict[str, str] = {
     # Intelligence Layer
     "@intelligence": "MasterIntelligenceAgent",
     "@workflow": "WorkflowAdapterAgent",
+    # Analysis Tier
+    "@code-analysis": "CodeAnalysisAgent",
+    "@test-analysis": "TestAnalysisAgent",
+    # Specialized Tier
+    "@code-modifier": "CodeModifierAgent",
+    "@test-modifier": "TestModifierAgent",
+    # Infrastructure Tier
+    "@env-modifier": "EnvironmentModifierAgent",
+    "@process": "ProcessExecutorAgent",
     # Foundational & Planning
     "@planner": "PlannerAgent",
     "@refiner": "PlanRefinementAgent",
@@ -156,13 +190,20 @@ if __name__ == "__main__":
         def test_registry_population(self):
             """Tests if the registry contains all the expected agents."""
             print("\n--- [Test Case 1: Registry Population] ---")
-            self.assertEqual(len(AGENT_REGISTRY), 17)  # Updated for 2 new intelligence agents
+            self.assertEqual(len(AGENT_REGISTRY), 24)  # Updated for 2 intelligence + 6 new tier agents
             self.assertIn("PlannerAgent", AGENT_REGISTRY)
             self.assertIn("CodeGenerationAgent", AGENT_REGISTRY)
             self.assertIn("TestRunnerAgent", AGENT_REGISTRY)
             # Check new intelligence agents
             self.assertIn("MasterIntelligenceAgent", AGENT_REGISTRY)
             self.assertIn("WorkflowAdapterAgent", AGENT_REGISTRY)
+            # Check new tier agents
+            self.assertIn("CodeAnalysisAgent", AGENT_REGISTRY)
+            self.assertIn("TestAnalysisAgent", AGENT_REGISTRY)
+            self.assertIn("CodeModifierAgent", AGENT_REGISTRY)
+            self.assertIn("TestModifierAgent", AGENT_REGISTRY)
+            self.assertIn("EnvironmentModifierAgent", AGENT_REGISTRY)
+            self.assertIn("ProcessExecutorAgent", AGENT_REGISTRY)
             logger.info(f"✅ Registry contains {len(AGENT_REGISTRY)} agents as expected.")
 
         def test_standard_agent_retrieval(self):
