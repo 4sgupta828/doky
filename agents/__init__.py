@@ -20,6 +20,9 @@ from .debugging import DebuggingAgent
 from .script_executor import ScriptExecutorAgent
 from .quality_officer import ChiefQualityOfficerAgent
 from .plan_refiner import PlanRefinementAgent
+from .requirements_manager import RequirementsManagerAgent
+from .cli_test_generator import CLITestGeneratorAgent
+from .execution_validator import ExecutionValidatorAgent
 
 # Get a logger instance for this module.
 logger = logging.getLogger(__name__)
@@ -42,6 +45,9 @@ AGENT_REGISTRY: Dict[str, Type[BaseAgent]] = {
     "CodeGenerationAgent": CodeGenerationAgent,
     "TestGenerationAgent": TestGenerationAgent,
     "TestRunnerAgent": TestRunnerAgent,
+    "RequirementsManagerAgent": RequirementsManagerAgent,
+    "CLITestGeneratorAgent": CLITestGeneratorAgent,
+    "ExecutionValidatorAgent": ExecutionValidatorAgent,
 
     # Research & Environment Agents
     "ContextBuilderAgent": ContextBuilderAgent,
@@ -64,6 +70,9 @@ AGENT_ALIASES: Dict[str, str] = {
     "@coder": "CodeGenerationAgent",
     "@testgen": "TestGenerationAgent",
     "@tester": "TestRunnerAgent",
+    "@requirements": "RequirementsManagerAgent",
+    "@cli-test": "CLITestGeneratorAgent", 
+    "@validate": "ExecutionValidatorAgent",
     "@context": "ContextBuilderAgent",
     "@run": "ToolingAgent",
     "@debug": "DebuggingAgent",
@@ -133,7 +142,7 @@ if __name__ == "__main__":
         def test_registry_population(self):
             """Tests if the registry contains all the expected agents."""
             print("\n--- [Test Case 1: Registry Population] ---")
-            self.assertEqual(len(AGENT_REGISTRY), 12)
+            self.assertEqual(len(AGENT_REGISTRY), 15)
             self.assertIn("PlannerAgent", AGENT_REGISTRY)
             self.assertIn("CodeGenerationAgent", AGENT_REGISTRY)
             self.assertIn("TestRunnerAgent", AGENT_REGISTRY)

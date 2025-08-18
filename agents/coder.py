@@ -640,6 +640,9 @@ class CodeGenerationAgent(BaseAgent):
                 self.report_intermediate_output("code_diff", modified_files)
                 logger.info(f"Displayed diff for {len(modified_files)} modified files")
 
+            # Run post-processing workflow with new helper agents
+            self._run_post_processing_workflow(written_files, generated_code_map, context, current_task)
+            
             return AgentResponse(
                 success=True,
                 message=f"Successfully generated and wrote {len(written_files)} files to the workspace.",
@@ -651,6 +654,125 @@ class CodeGenerationAgent(BaseAgent):
             logger.setLevel(original_level)
             llm_logger.setLevel(original_llm_level)
             module_logger.setLevel(original_module_level)
+    
+    def _run_post_processing_workflow(self, written_files: List[str], code_map: Dict[str, str], 
+                                    context: GlobalContext, current_task: TaskNode):
+        """Run post-processing workflow with helper agents."""
+        try:
+            self.report_progress("Post-processing", "Running dependency management and validation")
+            
+            # 1. Requirements Management
+            self._call_requirements_manager(code_map, context, current_task)
+            
+            # 2. CLI Test Generation  
+            test_script = self._call_cli_test_generator(code_map, context, current_task)
+            
+            # 3. Execution Validation
+            self._call_execution_validator(code_map, test_script, context, current_task)
+            
+        except Exception as e:
+            logger.warning(f"Post-processing workflow failed (non-critical): {e}")
+    
+    def _call_requirements_manager(self, code_map: Dict[str, str], context: GlobalContext, current_task: TaskNode):
+        """Call RequirementsManagerAgent to manage dependencies."""
+        try:
+            from . import RequirementsManagerAgent
+            
+            requirements_agent = RequirementsManagerAgent()
+            
+            # Set up progress tracking
+            if hasattr(self, 'progress_tracker') and self.progress_tracker:
+                requirements_agent.set_progress_tracker(self.progress_tracker, f"{current_task.task_id}_requirements")
+            
+            result = requirements_agent.execute_v2(
+                "Analyze generated code and update requirements.txt",
+                {
+                    'code_files': code_map,
+                    'output_directory': context.workspace_path
+                },
+                context
+            )
+            
+            if result.success:
+                logger.info(f"Requirements management completed: {result.message}")
+                if result.outputs.get('requirements_file'):
+                    context.add_artifact("requirements.txt", result.outputs['requirements_file'], current_task.task_id)
+            else:
+                logger.warning(f"Requirements management failed: {result.message}")
+                
+        except Exception as e:
+            logger.warning(f"Requirements management error: {e}")
+    
+    def _call_cli_test_generator(self, code_map: Dict[str, str], context: GlobalContext, current_task: TaskNode) -> str:
+        """Call CLITestGeneratorAgent to create test script."""
+        try:
+            from . import CLITestGeneratorAgent
+            
+            test_agent = CLITestGeneratorAgent(llm_client=self.llm_client)
+            
+            # Set up progress tracking
+            if hasattr(self, 'progress_tracker') and self.progress_tracker:
+                test_agent.set_progress_tracker(self.progress_tracker, f"{current_task.task_id}_testing")
+            
+            result = test_agent.execute_v2(
+                "Generate CLI test script for the generated code",
+                {
+                    'code_files': code_map,
+                    'specification': current_task.goal,
+                    'output_directory': context.workspace_path
+                },
+                context
+            )
+            
+            if result.success:
+                logger.info(f"CLI test generation completed: {result.message}")
+                test_script = result.outputs.get('test_script')
+                if test_script:
+                    context.add_artifact("test_cli.py", test_script, current_task.task_id)
+                return test_script
+            else:
+                logger.warning(f"CLI test generation failed: {result.message}")
+                return None
+                
+        except Exception as e:
+            logger.warning(f"CLI test generation error: {e}")
+            return None
+    
+    def _call_execution_validator(self, code_map: Dict[str, str], test_script: str, 
+                                context: GlobalContext, current_task: TaskNode):
+        """Call ExecutionValidatorAgent to validate the code."""
+        try:
+            from . import ExecutionValidatorAgent
+            
+            validator_agent = ExecutionValidatorAgent()
+            
+            # Set up progress tracking
+            if hasattr(self, 'progress_tracker') and self.progress_tracker:
+                validator_agent.set_progress_tracker(self.progress_tracker, f"{current_task.task_id}_validation")
+            
+            inputs = {
+                'code_files': code_map,
+                'output_directory': context.workspace_path
+            }
+            
+            if test_script:
+                inputs['test_script'] = test_script
+            
+            result = validator_agent.execute_v2(
+                "Validate generated code execution and functionality",
+                inputs,
+                context
+            )
+            
+            if result.success:
+                logger.info(f"Execution validation completed: {result.message}")
+                # Store validation results as artifact
+                context.add_artifact("validation_results.json", result.outputs, current_task.task_id)
+            else:
+                logger.warning(f"Execution validation failed: {result.message}")
+                
+        except Exception as e:
+            logger.warning(f"Execution validation error: {e}")
 
 
 
