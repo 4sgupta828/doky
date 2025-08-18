@@ -24,6 +24,10 @@ from .requirements_manager import RequirementsManagerAgent
 from .cli_test_generator import CLITestGeneratorAgent
 from .execution_validator import ExecutionValidatorAgent
 
+# Intelligence Layer Agents - Phase 1 Implementation
+from .master_intelligence import MasterIntelligenceAgent
+from .workflow_adapter import WorkflowAdapterAgent
+
 # Get a logger instance for this module.
 logger = logging.getLogger(__name__)
 
@@ -32,6 +36,10 @@ logger = logging.getLogger(__name__)
 # This registry maps a string name to the actual agent class.
 # It is the single source of truth for all available agents in the system.
 AGENT_REGISTRY: Dict[str, Type[BaseAgent]] = {
+    # Intelligence Layer - Phase 1 Implementation
+    "MasterIntelligenceAgent": MasterIntelligenceAgent,
+    "WorkflowAdapterAgent": WorkflowAdapterAgent,
+
     # Foundational Agents
     "PlannerAgent": PlannerAgent,
     "PlanRefinementAgent": PlanRefinementAgent,     
@@ -62,17 +70,23 @@ AGENT_REGISTRY: Dict[str, Type[BaseAgent]] = {
 # NEW: User-friendly aliases for direct invocation.
 AGENT_ALIASES: Dict[str, str] = {
     "@help": "HelpAgent", # A virtual agent for the help command
+    # Intelligence Layer
+    "@intelligence": "MasterIntelligenceAgent",
+    "@workflow": "WorkflowAdapterAgent",
+    # Foundational & Planning
     "@planner": "PlannerAgent",
     "@refiner": "PlanRefinementAgent",
     "@clarify": "IntentValidationAgent",
     "@spec": "SpecValidationAgent",
     "@manifest": "CodeManifestAgent",
+    # Development & Testing
     "@coder": "CodeGenerationAgent",
     "@testgen": "TestGenerationAgent",
     "@tester": "TestRunnerAgent",
     "@requirements": "RequirementsManagerAgent",
     "@cli-test": "CLITestGeneratorAgent", 
     "@validate": "ExecutionValidatorAgent",
+    # Environment & Diagnostics
     "@context": "ContextBuilderAgent",
     "@run": "ToolingAgent",
     "@debug": "DebuggingAgent",
@@ -142,10 +156,13 @@ if __name__ == "__main__":
         def test_registry_population(self):
             """Tests if the registry contains all the expected agents."""
             print("\n--- [Test Case 1: Registry Population] ---")
-            self.assertEqual(len(AGENT_REGISTRY), 15)
+            self.assertEqual(len(AGENT_REGISTRY), 17)  # Updated for 2 new intelligence agents
             self.assertIn("PlannerAgent", AGENT_REGISTRY)
             self.assertIn("CodeGenerationAgent", AGENT_REGISTRY)
             self.assertIn("TestRunnerAgent", AGENT_REGISTRY)
+            # Check new intelligence agents
+            self.assertIn("MasterIntelligenceAgent", AGENT_REGISTRY)
+            self.assertIn("WorkflowAdapterAgent", AGENT_REGISTRY)
             logger.info(f"✅ Registry contains {len(AGENT_REGISTRY)} agents as expected.")
 
         def test_standard_agent_retrieval(self):

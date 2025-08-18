@@ -126,6 +126,19 @@ class Orchestrator:
             if hasattr(debugging_agent, 'agent_registry'):
                 debugging_agent.agent_registry = registry
                 logging.info("✅ Injected agent registry into DebuggingAgent for cross-agent orchestration")
+        
+        # Intelligence Layer agents need access to all other agents
+        if "MasterIntelligenceAgent" in registry:
+            master_intelligence = registry["MasterIntelligenceAgent"]
+            if hasattr(master_intelligence, 'agent_registry'):
+                master_intelligence.agent_registry = registry
+                logging.info("✅ Injected agent registry into MasterIntelligenceAgent for strategic planning")
+        
+        if "WorkflowAdapterAgent" in registry:
+            workflow_adapter = registry["WorkflowAdapterAgent"]
+            if hasattr(workflow_adapter, 'agent_registry'):
+                workflow_adapter.agent_registry = registry
+                logging.info("✅ Injected agent registry into WorkflowAdapterAgent for workflow execution")
 
     def plan_mission(self, mission_goal: str) -> AgentResponse:
         """

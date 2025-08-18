@@ -116,6 +116,15 @@ class GlobalContext:
             logger.warning(f"Artifact with key '{key}' not found. Returning default value.")
         return self.artifacts.get(key, default)
     
+    def list_artifacts(self) -> List[str]:
+        """
+        Returns a list of all artifact keys currently stored.
+
+        Returns:
+            List of artifact keys.
+        """
+        return list(self.artifacts.keys())
+    
     def _auto_save_if_needed(self):
         """Performs an auto-save if enough time has passed since the last one."""
         now = datetime.now()
