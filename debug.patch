@@ -1,0 +1,143 @@
+--- a/agents/debugging.py
++++ b/agents/debugging.py
+@@ -19,6 +19,7 @@
+     fixes_attempted: List[str] = field(default_factory=list)
+     validation_history: List[Dict] = field(default_factory=list)
+     reflection_history: List[Dict] = field(default_factory=list) # NEW: Track reflections
+     confidence: float = 1.0 # Starts high, degrades on failure
+     last_error_report: Optional[Dict] = None
+ 
+@@ -82,7 +83,8 @@
+                 
+                 self._reflect_and_adapt(
+                     state,
+                     validation_passed=validation_result.success,
+-                    new_error_report=validation_result.outputs.get("failed_test_report")
++                    new_error_report=validation_result.outputs.get("failed_test_report"),
++                    fix_attempted=hypothesis["recommended_strategy"]
+                 )
+ 
+                 if validation_result.success:
+@@ -92,11 +94,11 @@
+                     state.last_error_report = validation_result.outputs.get("failed_test_report", state.last_error_report)
+ 
+             except Exception as e:
+                 logger.error(f"Debugging iteration failed with an exception: {e}", exc_info=True)
+-                self._reflect_and_adapt(state, validation_passed=False, new_error_report={"error": str(e)})
++                self._reflect_and_adapt(state, validation_passed=False, new_error_report={"error": str(e)}, fix_attempted="N/A")
+                 continue
+ 
+         return self.create_result(success=False, message=f"Unable to resolve issue after {max_iterations} iterations.")
+@@ -129,22 +131,49 @@
+             global_context=context
+         )
+ 
+-    def _reflect_and_adapt(self, state: DebuggingState, validation_passed: bool, new_error_report: Optional[Dict]):
++    def _reflect_and_adapt(self, state: DebuggingState, validation_passed: bool, new_error_report: Optional[Dict], fix_attempted: str):
+         """Phase 5: The meta-cognition step. Update state based on the outcome."""
+         if validation_passed:
+             state.confidence = 1.0
+-        else:
+-            last_error_str = json.dumps(state.last_error_report, sort_keys=True)
+-            new_error_str = json.dumps(new_error_report, sort_keys=True)
+-
+-            if new_error_str == last_error_str:
+-                state.confidence *= 0.6
+-                self.report_thinking("The fix had no effect. I am likely on the wrong track.")
+-            else:
+-                state.confidence *= 0.8
+-                self.report_thinking("The error has changed. This provides new information for the next attempt.")
++            state.reflection_history.append({"status": "SUCCESS", "summary": "Fix was successful."})
++            return
++
++        self.report_thinking("Fix was not successful. Reflecting on the failure to guide the next attempt.")
+         
++        # Use an LLM call to perform a structured reflection on the failure.
++        reflection_prompt = self._build_reflection_prompt(state.last_error_report, new_error_report, fix_attempted)
++        try:
++            reflection_str = self.llm_client.invoke(reflection_prompt)
++            reflection = json.loads(reflection_str)
++            state.reflection_history.append(reflection)
++            self.report_intermediate_output("failure_reflection", reflection)
++
++            # Update confidence based on the reflection
++            if reflection["failure_category"] == "SAME_ERROR":
++                state.confidence *= 0.6
++            elif reflection["failure_category"] == "REGRESSION":
++                state.confidence *= 0.5
++            else: # NEW_ERROR or INCOMPLETE_FIX
++                state.confidence *= 0.8
++        
++        except Exception as e:
++            logger.error(f"Failed to perform reflection: {e}")
++            state.confidence *= 0.7 # Default confidence degradation
++            state.reflection_history.append({"status": "ERROR", "summary": f"Reflection failed: {e}"})
++
+         state.last_error_report = new_error_report
++
++    def _build_reflection_prompt(self, old_error: Optional[Dict], new_error: Optional[Dict], fix_attempted: str) -> str:
++        """Builds a prompt for the LLM to analyze a failed fix attempt."""
++        return f"""
++        You are a senior software engineer performing a post-mortem on a failed bug fix attempt.
++        Analyze the original error, the attempted fix, and the new error to guide the next debugging step.
++
++        **Original Error Report:**
++        {json.dumps(old_error, indent=2, default=str)}
++
++        **Attempted Fix Strategy:**
++        "{fix_attempted}"
++
++        **New Error Report (after applying the fix):**
++        {json.dumps(new_error, indent=2, default=str)}
++
++        Analyze the situation and return a JSON object with this structure:
++        {{
++            "failure_category": "SAME_ERROR|NEW_ERROR|REGRESSION|INCOMPLETE_FIX|ENVIRONMENT_ISSUE",
++            "analysis": "A brief explanation of why the fix likely failed.",
++            "next_strategy_hint": "A high-level suggestion for what to try in the next iteration."
++        }}
++
++        - **SAME_ERROR**: The fix had no effect.
++        - **NEW_ERROR**: The fix caused a different error in the same area.
++        - **REGRESSION**: The fix caused an error in a different part of the system.
++        - **INCOMPLETE_FIX**: The fix addressed part of the problem but not all of it.
++        - **ENVIRONMENT_ISSUE**: The failure seems related to dependencies or setup, not the code logic.
++        """
+ 
+     def _gather_evidence(self, failed_report: Dict, code_context: Dict, env_data: Dict, context: GlobalContext) -> Dict:
+         """Phase 1: Gather comprehensive evidence."""
+@@ -171,19 +200,21 @@
+ 
+     def _build_analysis_prompt(self, evidence: Dict, state: DebuggingState) -> str:
+         """Constructs a prompt for the LLM to analyze the debugging evidence, including session state."""
++        last_reflection = state.reflection_history[-1] if state.reflection_history else None
++        
+         return f"""
+         You are an expert debugging agent. Your goal is to solve the following problem by generating a new hypothesis.
+-        Avoid repeating past mistakes.
++        Avoid repeating past mistakes by carefully considering the debugging history and the reflection on the last failed attempt.
+ 
+         **OVERALL PROBLEM TO SOLVE**: {state.problem_description}
+ 
+         **DEBUGGING HISTORY (What has been tried and failed):**
+         - Hypotheses Tested: {json.dumps(state.hypotheses_tested)}
+-        - Fixes Attempted: {json.dumps(state.fixes_attempted)}
+         - Last Known Error: {json.dumps(state.last_error_report, default=str)}
++        - Reflection on Last Failure: {json.dumps(last_reflection, default=str)}
+ 
+         **CURRENT EVIDENCE:**
+         {json.dumps(evidence, indent=2, default=str)}
+ 
+         Your analysis must be a valid JSON object with this structure:
+         {{
+-            "root_cause_analysis": "Detailed explanation of the bug.",
+-            "primary_hypothesis": "A NEW, UNTRIED hypothesis about the cause.",
++            "root_cause_analysis": "Detailed explanation of the bug, incorporating insights from the reflection.",
++            "primary_hypothesis": "A NEW, UNTRIED hypothesis about the cause, guided by the reflection.",
+             "solution_type": "SURGICAL|DESIGN_CHANGE",
+-            "recommended_strategy": "A NEW, UNTRIED approach to fix the issue."
++            "recommended_strategy": "A NEW, UNTRIED approach to fix the issue."
+         }}
+         """
+ 
+
