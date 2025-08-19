@@ -139,6 +139,15 @@ class Orchestrator:
             if hasattr(workflow_adapter, 'agent_registry'):
                 workflow_adapter.agent_registry = registry
                 logging.info("✅ Injected agent registry into WorkflowAdapterAgent for workflow execution")
+        
+        # Coordination Tier orchestrator agents need access to all other agents
+        coordination_agents = ["RequirementsOrchestratorAgent", "DevelopmentOrchestratorAgent", "DebuggingOrchestratorAgent"]
+        for agent_name in coordination_agents:
+            if agent_name in registry:
+                orchestrator_agent = registry[agent_name]
+                if hasattr(orchestrator_agent, 'agent_registry'):
+                    orchestrator_agent.agent_registry = registry
+                    logging.info(f"✅ Injected agent registry into {agent_name} for orchestration capabilities")
 
     def plan_mission(self, mission_goal: str) -> AgentResponse:
         """
@@ -149,6 +158,31 @@ class Orchestrator:
         
         planning_task = TaskNode(goal=mission_goal, assigned_agent="PlannerAgent")
         return self._invoke_agent(planning_task)
+
+    def intelligent_mission_planning(self, mission_goal: str) -> AgentResponse:
+        """
+        NEW: Routes through Intelligence layer first, then to appropriate orchestrator.
+        This is the preferred method for new 21-agent architecture workflow.
+        """
+        logging.info(f"Orchestrator received intelligent planning request for: '{mission_goal}'")
+        self.global_context.task_graph.nodes.clear() # Clear any previous plan
+        
+        # First, route through MasterIntelligenceAgent for strategic planning
+        if "MasterIntelligenceAgent" in self.agent_registry:
+            intelligence_task = TaskNode(goal=mission_goal, assigned_agent="MasterIntelligenceAgent")
+            intelligence_response = self._invoke_agent(intelligence_task)
+            
+            if intelligence_response.success:
+                logging.info("Intelligence layer strategic analysis completed successfully")
+                # Intelligence agent should have created or modified the task graph
+                return intelligence_response
+            else:
+                logging.warning(f"Intelligence layer failed: {intelligence_response.message}")
+                # Fall back to direct planning
+                return self.plan_mission(mission_goal)
+        else:
+            logging.warning("MasterIntelligenceAgent not available, falling back to direct planning")
+            return self.plan_mission(mission_goal)
 
     def refine_mission_plan(self, user_feedback: str) -> AgentResponse:
         """

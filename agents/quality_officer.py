@@ -20,7 +20,7 @@ class LLMClient:
 
 # --- Agent Implementation ---
 
-class ChiefQualityOfficerAgent(BaseAgent):
+class QualityOfficerAgent(BaseAgent):
     """
     The team's quality and security supervisor. This agent runs a suite of
     advanced checks to ensure the codebase is not just functional, but also
@@ -29,7 +29,7 @@ class ChiefQualityOfficerAgent(BaseAgent):
 
     def __init__(self, llm_client: Any = None):
         super().__init__(
-            name="ChiefQualityOfficerAgent",
+            name="QualityOfficerAgent",
             description="Performs static analysis, dependency audits, and security scans."
         )
         self.llm_client = llm_client or LLMClient()

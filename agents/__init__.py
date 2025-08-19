@@ -8,17 +8,17 @@ from .base import BaseAgent
 
 # Import every concrete agent implementation from its respective module.
 from .planner import PlannerAgent
-from .clarifier import IntentValidationAgent
-from .spec_generator import SpecValidationAgent
+from .clarifier import ClarifierAgent
+from .spec_generator import SpecGeneratorAgent
 from .code_manifest import CodeManifestAgent
-from .coder import CodeGenerationAgent
+from .coder import CoderAgent
 from .test_generator import TestGenerationAgent
 from .test_runner import TestRunnerAgent
 from .context_builder import ContextBuilderAgent
 from .tooling import ToolingAgent
 from .debugging import DebuggingAgent
 from .script_executor import ScriptExecutorAgent
-from .quality_officer import ChiefQualityOfficerAgent
+from .quality_officer import QualityOfficerAgent
 from .plan_refiner import PlanRefinementAgent
 from .requirements_manager import RequirementsManagerAgent
 from .cli_test_generator import CLITestGeneratorAgent
@@ -32,14 +32,24 @@ from .workflow_adapter import WorkflowAdapterAgent
 # Analysis Tier (Read-only)
 from .code_analysis import CodeAnalysisAgent
 from .test_analysis import TestAnalysisAgent
+from .environment_analysis import EnvironmentAnalysisAgent
+from .problem_analysis import ProblemAnalysisAgent
 
 # Specialized Tier (Write-only)
 from .code_modifier import CodeModifierAgent
 from .test_modifier import TestModifierAgent
+from .documentation import DocumentationAgent
 
 # Infrastructure Tier (System operations)
 from .environment_modifier import EnvironmentModifierAgent
+from .dependency_modifier import DependencyModifierAgent
+from .configuration_modifier import ConfigurationModifierAgent
 from .process_executor import ProcessExecutorAgent
+
+# Coordination Tier (Orchestrators)
+from .requirements_orchestrator import RequirementsOrchestratorAgent
+from .development_orchestrator import DevelopmentOrchestratorAgent
+from .debugging_orchestrator import DebuggingOrchestratorAgent
 
 # Get a logger instance for this module.
 logger = logging.getLogger(__name__)
@@ -56,26 +66,36 @@ AGENT_REGISTRY: Dict[str, Type[BaseAgent]] = {
     # Analysis Tier - Read-only analysis agents
     "CodeAnalysisAgent": CodeAnalysisAgent,
     "TestAnalysisAgent": TestAnalysisAgent,
+    "EnvironmentAnalysisAgent": EnvironmentAnalysisAgent,
+    "ProblemAnalysisAgent": ProblemAnalysisAgent,
     
     # Specialized Tier - Write-only modification agents
     "CodeModifierAgent": CodeModifierAgent,
     "TestModifierAgent": TestModifierAgent,
+    "DocumentationAgent": DocumentationAgent,
     
     # Infrastructure Tier - System operation agents
     "EnvironmentModifierAgent": EnvironmentModifierAgent,
+    "DependencyModifierAgent": DependencyModifierAgent,
+    "ConfigurationModifierAgent": ConfigurationModifierAgent,
     "ProcessExecutorAgent": ProcessExecutorAgent,
+    
+    # Coordination Tier - Orchestration agents
+    "RequirementsOrchestratorAgent": RequirementsOrchestratorAgent,
+    "DevelopmentOrchestratorAgent": DevelopmentOrchestratorAgent,
+    "DebuggingOrchestratorAgent": DebuggingOrchestratorAgent,
 
     # Foundational Agents
     "PlannerAgent": PlannerAgent,
     "PlanRefinementAgent": PlanRefinementAgent,     
-    "IntentValidationAgent": IntentValidationAgent,
+    "ClarifierAgent": ClarifierAgent,
 
     # Architecture & Design Agents
-    "SpecValidationAgent": SpecValidationAgent,
+    "SpecGeneratorAgent": SpecGeneratorAgent,
     "CodeManifestAgent": CodeManifestAgent,
 
     # Development & Testing Agents
-    "CodeGenerationAgent": CodeGenerationAgent,
+    "CoderAgent": CoderAgent,
     "TestGenerationAgent": TestGenerationAgent,
     "TestRunnerAgent": TestRunnerAgent,
     "RequirementsManagerAgent": RequirementsManagerAgent,
@@ -89,7 +109,7 @@ AGENT_REGISTRY: Dict[str, Type[BaseAgent]] = {
     # Diagnostics & Quality Agents
     "DebuggingAgent": DebuggingAgent,
     "ScriptExecutorAgent": ScriptExecutorAgent,
-    "ChiefQualityOfficerAgent": ChiefQualityOfficerAgent,
+    "QualityOfficerAgent": QualityOfficerAgent,
 }
 
 # NEW: User-friendly aliases for direct invocation.
@@ -100,21 +120,30 @@ AGENT_ALIASES: Dict[str, str] = {
     "@workflow": "WorkflowAdapterAgent",
     # Analysis Tier
     "@code-analysis": "CodeAnalysisAgent",
-    "@test-analysis": "TestAnalysisAgent",
+    "@test-analysis": "TestAnalysisAgent", 
+    "@env-analysis": "EnvironmentAnalysisAgent",
+    "@problem-analysis": "ProblemAnalysisAgent",
     # Specialized Tier
     "@code-modifier": "CodeModifierAgent",
     "@test-modifier": "TestModifierAgent",
+    "@docs": "DocumentationAgent",
     # Infrastructure Tier
     "@env-modifier": "EnvironmentModifierAgent",
+    "@dependency": "DependencyModifierAgent",
+    "@config": "ConfigurationModifierAgent",
     "@process": "ProcessExecutorAgent",
+    # Coordination Tier
+    "@requirements-orchestrator": "RequirementsOrchestratorAgent",
+    "@development-orchestrator": "DevelopmentOrchestratorAgent",
+    "@debugging-orchestrator": "DebuggingOrchestratorAgent",
     # Foundational & Planning
     "@planner": "PlannerAgent",
     "@refiner": "PlanRefinementAgent",
-    "@clarify": "IntentValidationAgent",
-    "@spec": "SpecValidationAgent",
+    "@clarify": "ClarifierAgent",
+    "@spec": "SpecGeneratorAgent",
     "@manifest": "CodeManifestAgent",
     # Development & Testing
-    "@coder": "CodeGenerationAgent",
+    "@coder": "CoderAgent",
     "@testgen": "TestGenerationAgent",
     "@tester": "TestRunnerAgent",
     "@requirements": "RequirementsManagerAgent",
@@ -125,7 +154,7 @@ AGENT_ALIASES: Dict[str, str] = {
     "@run": "ToolingAgent",
     "@debug": "DebuggingAgent",
     "@script": "ScriptExecutorAgent",
-    "@audit": "ChiefQualityOfficerAgent",
+    "@audit": "QualityOfficerAgent",
 }
 
 def get_agent_help() -> str:
@@ -190,9 +219,9 @@ if __name__ == "__main__":
         def test_registry_population(self):
             """Tests if the registry contains all the expected agents."""
             print("\n--- [Test Case 1: Registry Population] ---")
-            self.assertEqual(len(AGENT_REGISTRY), 24)  # Updated for 2 intelligence + 6 new tier agents
+            self.assertEqual(len(AGENT_REGISTRY), 30)  # Updated for 2 intelligence + 10 tier + 3 coordination agents
             self.assertIn("PlannerAgent", AGENT_REGISTRY)
-            self.assertIn("CodeGenerationAgent", AGENT_REGISTRY)
+            self.assertIn("CoderAgent", AGENT_REGISTRY)
             self.assertIn("TestRunnerAgent", AGENT_REGISTRY)
             # Check new intelligence agents
             self.assertIn("MasterIntelligenceAgent", AGENT_REGISTRY)
@@ -200,9 +229,13 @@ if __name__ == "__main__":
             # Check new tier agents
             self.assertIn("CodeAnalysisAgent", AGENT_REGISTRY)
             self.assertIn("TestAnalysisAgent", AGENT_REGISTRY)
+            self.assertIn("EnvironmentAnalysisAgent", AGENT_REGISTRY)
+            self.assertIn("ProblemAnalysisAgent", AGENT_REGISTRY)
             self.assertIn("CodeModifierAgent", AGENT_REGISTRY)
             self.assertIn("TestModifierAgent", AGENT_REGISTRY)
             self.assertIn("EnvironmentModifierAgent", AGENT_REGISTRY)
+            self.assertIn("DependencyModifierAgent", AGENT_REGISTRY)
+            self.assertIn("ConfigurationModifierAgent", AGENT_REGISTRY)
             self.assertIn("ProcessExecutorAgent", AGENT_REGISTRY)
             logger.info(f"✅ Registry contains {len(AGENT_REGISTRY)} agents as expected.")
 
@@ -210,9 +243,9 @@ if __name__ == "__main__":
             """Tests successful retrieval and instantiation of a standard agent."""
             print("\n--- [Test Case 2: Standard Agent Retrieval] ---")
             try:
-                coder_instance = get_agent("CodeGenerationAgent")
+                coder_instance = get_agent("CoderAgent")
                 self.assertIsInstance(coder_instance, BaseAgent)
-                self.assertEqual(coder_instance.name, "CodeGenerationAgent")
+                self.assertEqual(coder_instance.name, "CoderAgent")
                 logger.info("✅ Successfully retrieved a standard agent instance.")
             except Exception as e:
                 self.fail(f"Standard agent retrieval failed unexpectedly: {e}")

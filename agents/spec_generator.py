@@ -34,7 +34,7 @@ class CollaborationUI:
 
 # --- Agent Implementation ---
 
-class SpecValidationAgent(BaseAgent):
+class SpecGeneratorAgent(BaseAgent):
     """
     Acts as the project's software architect, presenting its interpretation of requirements
     as a technical specification and validates the approach with the user before finalizing.
@@ -42,7 +42,7 @@ class SpecValidationAgent(BaseAgent):
 
     def __init__(self, llm_client: Any = None, ui_interface: Any = None, default_quality: SpecQuality = SpecQuality.FAST):
         super().__init__(
-            name="SpecValidationAgent", 
+            name="SpecGeneratorAgent", 
             description="Creates detailed technical specifications and validates the approach with the user."
         )
         self.llm_client = llm_client or LLMClient()

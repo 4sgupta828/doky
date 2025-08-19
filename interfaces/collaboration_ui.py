@@ -151,7 +151,7 @@ class CollaborationUI:
         
         if not task_graph.nodes:
             print("No tasks in the plan.")
-            return False
+            return "cancel"
         
         # Display tasks in dependency order
         for i, (task_id, task) in enumerate(task_graph.nodes.items(), 1):

@@ -106,8 +106,8 @@ class InteractiveSession:
         while True: # This is the Plan-Refine-Confirm loop
             # --- PLAN STAGE (only on first iteration or after plan failure) ---
             if not plan_generated:
-                self.ui.display_system_message(f"Analyzing goal and generating a plan for: '{current_goal}'")
-                plan_response: AgentResponse = self.orchestrator.plan_mission(current_goal)
+                self.ui.display_system_message(f"Analyzing goal through Intelligence layer and generating a plan for: '{current_goal}'")
+                plan_response: AgentResponse = self.orchestrator.intelligent_mission_planning(current_goal)
 
                 if not plan_response.success:
                     self.ui.display_system_message(f"Failed to create a plan: {plan_response.message}", is_error=True)

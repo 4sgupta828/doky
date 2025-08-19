@@ -27,7 +27,7 @@ class CollaborationUI:
 
 # --- Agent Implementation ---
 
-class IntentValidationAgent(BaseAgent):
+class ClarifierAgent(BaseAgent):
     """
     The team's business analyst. It uses an LLM to analyze the user's request,
     presents its understanding of the intent, self-answers potential questions,
@@ -43,7 +43,7 @@ class IntentValidationAgent(BaseAgent):
             ui_interface: An object that handles interaction with the user.
         """
         super().__init__(
-            name="IntentValidationAgent",
+            name="ClarifierAgent",
             description="Presents understanding of user intent and validates assumptions with the user."
         )
         self.llm_client = llm_client or LLMClient()

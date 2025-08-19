@@ -36,7 +36,7 @@ class LLMClient:
 
 # --- Agent Implementation ---
 
-class CodeGenerationAgent(BaseAgent):
+class CoderAgent(BaseAgent):
     """
     A specialized agent responsible for writing and modifying source code.
     It takes a detailed technical specification and a file manifest as input and
@@ -45,7 +45,7 @@ class CodeGenerationAgent(BaseAgent):
 
     def __init__(self, llm_client: Any = None, default_quality: CodeQuality = CodeQuality.FAST):
         super().__init__(
-            name="CodeGenerationAgent",
+            name="CoderAgent",
             description="Writes, modifies, and refactors application code based on a spec."
         )
         self.llm_client = llm_client or LLMClient()
