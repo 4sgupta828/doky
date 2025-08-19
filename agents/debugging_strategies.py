@@ -2,12 +2,14 @@
 import logging
 import json
 import re
+import uuid
 from typing import Dict, Any, List
 
 # Foundational dependencies
 from .base import BaseAgent
 from core.context import GlobalContext
 from core.models import AgentResult
+from core.instruction_schemas import InstructionScript, InstructionType
 
 logger = logging.getLogger(__name__)
 
@@ -65,8 +67,6 @@ def scan_for_logs(problem_description: str, agent_registry: Dict[str, BaseAgent]
     if not tooling_agent:
         return AgentResult(success=False, message="ToolingAgent not available for log scanning.")
 
-    # --- NEW: Two-Step Investigation ---
-    # 1. Discover configured log files
     logger.info("Discovering logging configurations in the codebase...")
     configured_log_files = _discover_log_configurations(agent_registry, context)
     
@@ -74,28 +74,23 @@ def scan_for_logs(problem_description: str, agent_registry: Dict[str, BaseAgent]
     keyword_pattern = '|'.join(keywords)
     log_scan_commands = []
 
-    # 2. Create targeted search commands if configs are found
     if configured_log_files:
         logger.info(f"Found potential log files: {configured_log_files}. Performing targeted scan.")
-        # Create a single, powerful grep command for all discovered files
         files_to_scan = " ".join([f'"{path}"' for path in configured_log_files])
         log_scan_commands.append(f"grep -iE '{keyword_pattern}' {files_to_scan} | tail -n 100")
     
-    # 3. Always include fallback search commands
     logger.info("Adding fallback search for common log locations.")
     log_scan_commands.extend([
         f"find . -name '*.log' -print0 | xargs -0 grep -iE '{keyword_pattern}' | tail -n 50",
         f"grep -iE '{keyword_pattern}' /var/log/*.log /var/log/syslog | tail -n 50"
     ])
 
-    logger.info(f"Scanning for logs with {len(log_scan_commands)} command groups.")
-
     return tooling_agent.execute_v2(
         goal="Scan for relevant error logs based on the problem description.",
         inputs={
             "commands": log_scan_commands,
             "purpose": "Log Scanning",
-            "ignore_errors": True # Don't stop if one command fails
+            "ignore_errors": True
         },
         global_context=context
     )
@@ -129,15 +124,13 @@ def instrument_code_for_debugging(hypothesis: Dict, code_context: Dict, agent_re
 
         if not isinstance(instrumentation_plan, dict):
             return AgentResult(success=False, message="LLM failed to generate a valid instrumentation plan.")
-
-        from core.instruction_schemas import InstructionScript, InstructionType
         
         instructions = []
         for file_path, line_map in instrumentation_plan.items():
             for line_num, content in line_map.items():
                 instructions.append({
                     "instruction_id": f"instrument_{file_path}_{line_num}",
-                    "instruction_type": InstructionType.INSERT_CODE,
+                    "instruction_type": InstructionType.INSERT_CODE.value,
                     "target": {"file_path": file_path, "line_start": int(line_num)},
                     "content": content
                 })

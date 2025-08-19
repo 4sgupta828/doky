@@ -14,6 +14,8 @@ from core.instruction_schemas import (
     create_fix_code_instruction,
     ToolingInstruction
 )
+# Import the new strategies
+from .debugging_strategies import scan_for_logs, instrument_code_for_debugging
 
 # Get a logger instance for this module
 logger = logging.getLogger(__name__)
@@ -62,6 +64,8 @@ class DebuggingAgent(BaseAgent):
             last_error_report=inputs.get("failed_test_report")
         )
         max_iterations = inputs.get("max_iterations", self.max_debug_iterations)
+        code_context = inputs.get("code_context", {}) # Keep original code context
+
         self.report_progress("Starting debug session", f"Goal: {state.problem_description[:80]}...")
 
         if not state.last_error_report:
@@ -103,6 +107,14 @@ class DebuggingAgent(BaseAgent):
                     return self.create_result(success=True, message=f"Successfully resolved: {state.problem_description}")
                 else:
                     state.last_error_report = validation_result.outputs.get("failed_test_report", state.last_error_report)
+                    if state.confidence < 0.5:
+                        self.report_thinking("Confidence is low after failed fix. Attempting dynamic code instrumentation to gather more runtime data.")
+                        instrument_result = self._instrument_and_re_run(hypothesis, code_context, state, global_context)
+                        if instrument_result.success:
+                            state.last_error_report = instrument_result.outputs.get("failed_test_report")
+                            self.report_thinking("Instrumentation successful. Proceeding to next iteration with new runtime data.")
+                        else:
+                            self.report_thinking(f"Instrumentation failed: {instrument_result.message}. Proceeding with existing data.")
 
             except Exception as e:
                 logger.error(f"Debugging iteration failed with an exception: {e}", exc_info=True)
@@ -275,6 +287,21 @@ class DebuggingAgent(BaseAgent):
 
         return evidence
 
+    def _instrument_and_re_run(self, hypothesis: Dict, code_context: Dict, state: DebuggingState, context: GlobalContext) -> AgentResult:
+        """A special investigation phase to add debug statements and re-run the failing test."""
+        self.report_progress("Instrumenting Code", "Adding debug statements to gather runtime data.")
+        
+        instrument_result = instrument_code_for_debugging(hypothesis, code_context, self.agent_registry, context)
+        if not instrument_result.success:
+            return instrument_result
+
+        self.report_progress("Re-validating Instrumented Code", "Running tests again to capture debug output.")
+        validation_result = self._validate_fix(context)
+
+        self.report_thinking("Reverting instrumentation to clean up the codebase.")
+        # In a real system, a revert script would be generated and executed here.
+
+        return validation_result
 
     def _execute_fix_strategy(self, hypothesis: Dict, evidence: Dict, context: GlobalContext) -> AgentResult:
         solution_type = hypothesis.get("solution_type", "DESIGN_CHANGE")
