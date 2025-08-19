@@ -6,7 +6,7 @@ from typing import Optional
 # Foundational dependencies
 from orchestrator import Orchestrator
 from interfaces.collaboration_ui import CollaborationUI, Style
-from core.models import AgentResponse
+from core.models import AgentResponse, SessionState # <-- IMPORT THE NEW STATE MACHINE
 from agents import AGENT_ALIASES, get_agent_help
 
 # Get a logger instance for this module
@@ -16,6 +16,7 @@ class InteractiveSession:
     """
     Manages the continuous, interactive session with the user, orchestrating the
     entire Read-Plan-Execute-Loop (RPEL) with a refinement stage.
+    This is now driven by a formal state machine.
     """
 
     def __init__(self, workspace_path: Optional[str] = None, resume_snapshot: Optional[str] = None):
@@ -24,11 +25,13 @@ class InteractiveSession:
 
         Args:
             workspace_path: The file path for the mission's workspace. If None,
-                          auto-generates a timestamped directory in /Users/sgupta/
+                          auto-generates a timestamped directory.
             resume_snapshot: Path to snapshot file to resume from (for crash recovery)
         """
         try:
             self.ui = CollaborationUI()
+            self.state = SessionState.AWAITING_USER_INPUT # <-- SET INITIAL STATE
+            self.current_goal = None # <-- Store the active goal
             
             # Handle session resume from snapshot
             if resume_snapshot:
@@ -46,8 +49,8 @@ class InteractiveSession:
 
     def start(self):
         """
-        The main Read-Plan-Execute-Loop (RPEL). This is the primary entry point
-        that runs the interactive session.
+        The main state-driven loop for the interactive session. This replaces the
+        simple Read-Plan-Execute-Loop (RPEL) with a formal state machine.
         """
         self.ui.display_system_message(f"{Style.BOLD}Sovereign Agent Collective: Interactive Session Activated{Style.RESET}")
         
@@ -66,95 +69,100 @@ class InteractiveSession:
 
         while True:
             try:
-                user_input = self.ui.prompt_for_input("Your command")
-                if user_input.lower() in ["exit", "quit"]:
-                    # Save session data before exiting
-                    self._save_session_data()
-                    self.ui.display_system_message("Session terminated. Goodbye!")
-                    break
+                # --- STATE: AWAITING_USER_INPUT ---
+                if self.state == SessionState.AWAITING_USER_INPUT:
+                    user_input = self.ui.prompt_for_input("Your command")
+                    if user_input.lower() in ["exit", "quit"]:
+                        self._save_session_data()
+                        self.ui.display_system_message("Session terminated. Goodbye!")
+                        break
 
-                if not user_input:
-                    continue
+                    if not user_input:
+                        continue
+                    
+                    self.current_goal = user_input # Store the goal
+                    
+                    # Transition to the next state based on input
+                    if user_input.lower() in ["/clear", "/reset"]:
+                        self._handle_clear_command()
+                        # State remains AWAITING_USER_INPUT
+                    elif user_input.startswith('@'):
+                        self.state = SessionState.DIRECT_COMMAND
+                    else:
+                        self.state = SessionState.PLANNING
 
-                # --- COMMAND DISPATCHER ---
-                if user_input.lower() in ["/clear", "/reset"]:
-                    self._handle_clear_command()
-                elif user_input.lower() == "ctrl+r" or user_input == "\x12":  # Handle Ctrl+R
-                    self.ui.display_full_output()
-                    continue
-                elif user_input.startswith('@'):
-                    self._handle_direct_command(user_input)
-                else:
-                    self._handle_goal_command(user_input)
+                # --- STATE: DIRECT_COMMAND ---
+                elif self.state == SessionState.DIRECT_COMMAND:
+                    self._handle_direct_command(self.current_goal)
+                    self.ui.display_status(self.global_context, "Ready for your next command.")
+                    self.state = SessionState.AWAITING_USER_INPUT # Return to waiting
 
-                self.ui.display_status(self.global_context, "Ready for your next command.")
+                # --- STATE: PLANNING ---
+                elif self.state == SessionState.PLANNING:
+                    self._handle_planning()
+                    # State will be transitioned inside _handle_planning
+
+                # --- STATE: AWAITING_PLAN_APPROVAL ---
+                elif self.state == SessionState.AWAITING_PLAN_APPROVAL:
+                    self._handle_plan_approval()
+                    # State will be transitioned inside _handle_plan_approval
+
+                # --- STATE: EXECUTING_PLAN ---
+                elif self.state == SessionState.EXECUTING_PLAN:
+                    self.ui.display_system_message("Plan approved. Executing plan...")
+                    final_status = self.orchestrator.execute_plan()
+                    self.ui.display_system_message(f"Plan execution finished. {final_status}")
+                    self.ui.display_status(self.global_context, "Ready for your next command.")
+                    self.state = SessionState.AWAITING_USER_INPUT # Return to waiting
 
             except KeyboardInterrupt:
-                # Save session data before exiting
                 self._save_session_data()
                 self.ui.display_system_message("\nSession interrupted by user. Goodbye!")
                 break
             except Exception as e:
                 logger.critical("A critical error occurred in the session loop.", exc_info=True)
                 self.ui.display_system_message(f"A fatal error occurred: {e}", is_error=True)
+                self.state = SessionState.AWAITING_USER_INPUT # Reset state on error
 
-    def _handle_goal_command(self, goal: str):
-        """
-        Orchestrates the plan, confirm, and execute stages, including a
-        refinement loop for the user to perfect the plan.
-        """
-        current_goal = goal
-        plan_generated = False
+    def _handle_planning(self):
+        """Handles the PLANNING state."""
+        self.ui.display_system_message(f"Analyzing goal and generating a plan for: '{self.current_goal}'")
+        plan_response: AgentResponse = self.orchestrator.intelligent_mission_planning(self.current_goal)
+
+        if not plan_response.success:
+            self.ui.display_system_message(f"Failed to create a plan: {plan_response.message}", is_error=True)
+            self.state = SessionState.AWAITING_USER_INPUT # Go back to waiting for a new goal
+        else:
+            self.state = SessionState.AWAITING_PLAN_APPROVAL # Move to approval state
+
+    def _handle_plan_approval(self):
+        """Handles the AWAITING_PLAN_APPROVAL state."""
+        user_choice = self.ui.present_plan_for_approval(self.global_context.task_graph)
+
+        if user_choice == "approve":
+            self.state = SessionState.EXECUTING_PLAN # User approved, move to execution
         
-        while True: # This is the Plan-Refine-Confirm loop
-            # --- PLAN STAGE (only on first iteration or after plan failure) ---
-            if not plan_generated:
-                self.ui.display_system_message(f"Analyzing goal through Intelligence layer and generating a plan for: '{current_goal}'")
-                plan_response: AgentResponse = self.orchestrator.intelligent_mission_planning(current_goal)
+        elif user_choice == "refine":
+            refinement_feedback = self.ui.prompt_for_input("Please provide your feedback, question, or refinement")
+            if not refinement_feedback:
+                self.ui.display_system_message("No refinement provided. Presenting previous plan again.", is_error=True)
+                # State remains AWAITING_PLAN_APPROVAL
+                return
 
-                if not plan_response.success:
-                    self.ui.display_system_message(f"Failed to create a plan: {plan_response.message}", is_error=True)
-                    return # Exit the handler and wait for a new goal
-                    
-                plan_generated = True
-
-            # --- CONFIRM STAGE ---
-            user_choice = self.ui.present_plan_for_approval(self.global_context.task_graph)
-
-            if user_choice == "approve":
-                # The user is happy with the plan, so we break the loop and proceed to execution.
-                break 
+            self.ui.display_system_message("Incorporating your feedback and refining the plan...")
+            refinement_response = self.orchestrator.refine_mission_plan(refinement_feedback)
             
-            elif user_choice == "refine":
-                # The user wants to change the goal. We prompt for feedback and loop again.
-                refinement_feedback = self.ui.prompt_for_input("Please provide your feedback, question, or refinement")
-                if not refinement_feedback:
-                    self.ui.display_system_message("No refinement provided. Presenting previous plan again.", is_error=True)
-                    continue
-                
-                # Invoke the PlanRefinementAgent via the orchestrator
-                self.ui.display_system_message("Incorporating your feedback and refining the plan...")
-                refinement_response = self.orchestrator.refine_mission_plan(refinement_feedback)
-                
-                # Display the agent's natural language response
-                self.ui.display_system_message(refinement_response.message)
+            self.ui.display_system_message(refinement_response.message)
 
-                if not refinement_response.success:
-                    self.ui.display_system_message("Failed to refine the plan. Presenting previous plan for another action.", is_error=True)
-                
-                # The loop will now continue, presenting the newly refined plan.
-                continue
-
-            elif user_choice == "cancel":
-                # The user wants to scrap this plan entirely.
-                self.ui.display_system_message("Plan cancelled. Awaiting next goal.")
-                self.global_context.task_graph.nodes.clear()
-                return # Exit the handler and wait for a completely new goal
-
-        # --- EXECUTE STAGE ---
-        self.ui.display_system_message("Plan approved. Executing plan...")
-        final_status = self.orchestrator.execute_plan()
-        self.ui.display_system_message(f"Plan execution finished. {final_status}")
+            if not refinement_response.success:
+                self.ui.display_system_message("Failed to refine the plan. Presenting previous plan for another action.", is_error=True)
+            
+            # State remains AWAITING_PLAN_APPROVAL to show the new plan
+        
+        elif user_choice == "cancel":
+            self.ui.display_system_message("Plan cancelled. Awaiting next goal.")
+            self.global_context.task_graph.nodes.clear()
+            self.state = SessionState.AWAITING_USER_INPUT # Go back to waiting for a new goal
 
     def _handle_direct_command(self, user_input: str):
         """Parses and executes a direct agent command (e.g., '@coder write a function')."""

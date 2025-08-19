@@ -2,6 +2,7 @@
 import uuid
 import logging
 from typing import List, Dict, Any, Literal, Optional
+from enum import Enum, auto
 
 # Pydantic is used for its robust data validation and serialization capabilities.
 # It ensures that data flowing through the system conforms to a strict schema.
@@ -9,6 +10,17 @@ from pydantic import BaseModel, Field, ValidationError
 
 # Get a logger instance for this module to report on model-related events.
 logger = logging.getLogger(__name__)
+
+# --- NEW: Formal State Machine for the Interactive Session ---
+class SessionState(Enum):
+    """Defines the explicit states for the interactive session loop."""
+    AWAITING_USER_INPUT = auto()
+    PLANNING = auto()
+    AWAITING_PLAN_APPROVAL = auto()
+    EXECUTING_PLAN = auto()
+    HANDLING_FAILURE = auto()
+    DIRECT_COMMAND = auto()
+
 
 # --- Agent Execution Models (Function-Call Semantics) ---
 
