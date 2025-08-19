@@ -124,7 +124,6 @@ class DebuggingAgent(BaseAgent):
 
         self.report_progress("Reproducing Bug", "Delegating to TestGenerationAgent to create a failing test.")
         
-        # Call TestGenerationAgent
         test_gen_result = self.call_agent_v2(
             target_agent=test_gen_agent,
             goal=f"Create a single Python test file that fails by demonstrating this bug: {state.problem_description}",
@@ -138,7 +137,6 @@ class DebuggingAgent(BaseAgent):
         if not test_gen_result.success:
             return test_gen_result
         
-        # Now, run the newly created test to get a failure report
         test_runner = self.agent_registry.get("TestRunnerAgent")
         if not test_runner:
             return self.create_result(success=False, message="TestRunnerAgent not available to confirm bug reproduction.")
@@ -155,7 +153,6 @@ class DebuggingAgent(BaseAgent):
         if validation_passed:
             state.confidence = 1.0
         else:
-            # Compare JSON strings for a simple but effective check
             last_error_str = json.dumps(state.last_error_report, sort_keys=True)
             new_error_str = json.dumps(new_error_report, sort_keys=True)
 
@@ -172,21 +169,14 @@ class DebuggingAgent(BaseAgent):
         """Phase 1: Gather comprehensive evidence."""
         self.report_thinking("Gathering evidence: collecting failure reports, system context, and environment data.")
         
-        evidence = {
-            "initial_failure": failed_report,
-            "code_context": code_context,
-            "environment_data": env_data
-        }
+        evidence = {"initial_failure": failed_report, "code_context": code_context, "environment_data": env_data}
 
         tooling_agent = self.agent_registry.get("ToolingAgent")
         if tooling_agent:
             diagnostic_result = self.call_agent_v2(
                 target_agent=tooling_agent,
                 goal="Gather diagnostic evidence for debugging",
-                inputs={
-                    "commands": ["git status --porcelain", "ls -laR"],
-                    "purpose": "Gather repository status and file structure."
-                },
+                inputs={"commands": ["git status --porcelain", "ls -laR"], "purpose": "Gather repository status and file structure."},
                 global_context=context
             )
             if diagnostic_result.success:
@@ -224,13 +214,11 @@ class DebuggingAgent(BaseAgent):
 
         Your analysis must be a valid JSON object with this structure:
         {{
-            "root_cause_analysis": "Detailed explanation of the bug, considering the history and the overall problem.",
-            "primary_hypothesis": "A NEW, UNTRIED hypothesis about the most likely cause.",
+            "root_cause_analysis": "Detailed explanation of the bug.",
+            "primary_hypothesis": "A NEW, UNTRIED hypothesis about the cause.",
             "solution_type": "SURGICAL|DESIGN_CHANGE",
             "recommended_strategy": "A NEW, UNTRIED approach to fix the issue."
         }}
-        - Use "SURGICAL" for small, targeted fixes.
-        - Use "DESIGN_CHANGE" for larger refactoring or architectural changes.
         """
 
     def _execute_fix_strategy(self, hypothesis: Dict, evidence: Dict, context: GlobalContext) -> AgentResult:
@@ -248,21 +236,17 @@ class DebuggingAgent(BaseAgent):
                 inputs={"instruction_script": script.model_dump()},
                 global_context=context
             )
-        else: # Default to a design change / refactoring approach
+        else: 
             self.report_thinking("A design change is required. Generating a new technical specification for the CoderAgent.")
             new_spec = self._generate_new_spec_for_coder(hypothesis, evidence)
             context.add_artifact("technical_spec.md", new_spec, "DebuggingAgent")
             
-            # Extract the list of file paths from the code_context
             files_to_generate = [file_info['path'] for file_info in evidence.get("code_context", {}).get("files", [])]
 
             return self.call_agent_v2(
                 target_agent=self.agent_registry["CoderAgent"],
                 goal="Implement the required design change based on the new specification.",
-                inputs={
-                    "technical_spec": new_spec,
-                    "files_to_generate": files_to_generate
-                },
+                inputs={"technical_spec": new_spec, "files_to_generate": files_to_generate},
                 global_context=context
             )
 
@@ -282,52 +266,62 @@ class DebuggingAgent(BaseAgent):
         )
 
     def _build_surgical_fix_prompt(self, hypothesis: Dict, evidence: Dict) -> str:
-        """Constructs a prompt for the LLM to generate a code fix as a diff."""
+        """Constructs a prompt for the LLM to generate a code fix as a multi-file diff."""
         code_context_str = json.dumps(evidence.get("code_context", {}), indent=2)
         
         return f"""
         You are an expert software developer specializing in surgical code fixes.
-        Based on the following analysis and code, generate a code patch in the standard 'diff' format.
+        Based on the analysis and code, generate a set of code patches in the standard 'diff' format.
+        The fix may require changes to one or more files.
 
-        **Root Cause Analysis**: {hypothesis.get('root_cause_analysis')}
-        **Primary Hypothesis**: {hypothesis.get('primary_hypothesis')}
-        **Recommended Strategy**: {hypothesis.get('recommended_strategy')}
-
-        **Relevant Code:**
+        **Analysis**: {json.dumps(hypothesis, indent=2)}
+        **Relevant Code**:
         ---
         {code_context_str}
         ---
 
-        Generate a JSON object with a single key, "suggested_fix_diff", containing the code patch as a string.
-        The diff must be in the standard unified diff format.
+        Generate a JSON object with a single key, "suggested_fix_diffs", which is a dictionary where each key is a file path and each value is the code patch for that file.
 
-        Example:
+        Example for a multi-file fix:
         {{
-            "suggested_fix_diff": "--- a/src/main.py\\n+++ b/src/main.py\\n@@ -1,2 +1,4 @@\\n def my_func():\\n+    # This is the fix\\n     return True"
+            "suggested_fix_diffs": {{
+                "src/main.py": "--- a/src/main.py\\n+++ b/src/main.py\\n@@ -5,1 +5,1 @@\\n-import old_library\\n+import new_library",
+                "src/utils.py": "--- a/src/utils.py\\n+++ b/src/utils.py\\n@@ -10,1 +10,1 @@\\n-def old_function():\\n+def new_function():"
+            }}
         }}
         """
 
     def _create_surgical_repair_script(self, hypothesis: Dict, evidence: Dict) -> InstructionScript:
-        """Creates a structured script for a targeted fix, now with an LLM-generated diff."""
-        file_to_fix = list(evidence.get("code_context", {}).get("files", [{}])[0].keys())[0]
+        """Creates a structured script for a targeted fix, now with an LLM-generated multi-file diff."""
+        instructions = []
         
-        # --- NEW: Call LLM to generate the fix ---
         fix_prompt = self._build_surgical_fix_prompt(hypothesis, evidence)
         try:
             fix_response_str = self.llm_client.invoke(fix_prompt)
             fix_data = json.loads(fix_response_str)
-            fix_content = fix_data.get("suggested_fix_diff", "# LLM failed to generate a valid diff.")
+            diff_map = fix_data.get("suggested_fix_diffs", {})
+
+            if not isinstance(diff_map, dict):
+                raise ValueError("LLM did not return a valid dictionary of diffs.")
+
+            for i, (file_path, diff_content) in enumerate(diff_map.items()):
+                instruction = create_fix_code_instruction(
+                    instruction_id=f"fix_{i+1}",
+                    file_path=file_path,
+                    issue_description=f"Apply surgical fix to {file_path}",
+                    fix_content=diff_content
+                )
+                instructions.append(instruction)
+
         except Exception as e:
             logger.error(f"Failed to generate surgical fix from LLM: {e}")
-            fix_content = f"# Error generating fix: {e}"
-        # --- End of new logic ---
-
-        instruction = create_fix_code_instruction(
-            instruction_id="fix_001",
-            file_path=file_to_fix,
-            issue_description=hypothesis["primary_hypothesis"],
-            fix_content=fix_content # Use the LLM-generated diff
-        )
+            # Create a placeholder instruction if LLM fails
+            instructions.append(create_fix_code_instruction(
+                instruction_id="fix_failed",
+                file_path="error.log",
+                issue_description="Error during fix generation",
+                fix_content=f"Error: {e}"
+            ))
         
         return InstructionScript(
             script_id=f"repair_{uuid.uuid4().hex[:8]}",
@@ -335,12 +329,11 @@ class DebuggingAgent(BaseAgent):
             description=hypothesis["recommended_strategy"],
             created_by="DebuggingAgent",
             target_issue=hypothesis["root_cause_analysis"],
-            instructions=[instruction]
+            instructions=instructions
         )
 
     def _generate_new_spec_for_coder(self, hypothesis: Dict, evidence: Dict) -> str:
         """Generates a new technical specification for a design change."""
-        # Extract file paths from the evidence
         affected_files = [file_info['path'] for file_info in evidence.get("code_context", {}).get("files", [])]
 
         return f"""
@@ -354,33 +347,27 @@ class DebuggingAgent(BaseAgent):
     
     def _request_user_guidance(self, hypothesis: Dict, state: DebuggingState, context: GlobalContext) -> bool:
         """Pause the loop and ask the user for help."""
-        # This requires the UI agent to be available
-        ui_agent = self.agent_registry.get("ClarifierAgent") # Using Clarifier as a proxy for UI
-        if not ui_agent:
+        ui_agent = self.agent_registry.get("ClarifierAgent")
+        if not ui_agent or not hasattr(ui_agent, 'ui') or not hasattr(ui_agent.ui, 'prompt_for_input'):
             logger.warning("UI agent not available, cannot request user guidance.")
-            return True # Continue without guidance
+            return True
 
         prompt = f"""
         I'm having trouble solving this bug. Here is my current analysis:
-        
         **Hypothesis**: {hypothesis.get('primary_hypothesis')}
         **Proposed Strategy**: {hypothesis.get('recommended_strategy')}
         
-        I have already tried the following fixes:
-        - {chr(10).join(f'- {fix}' for fix in state.fixes_attempted)}
+        I have already tried: {', '.join(state.fixes_attempted) or 'nothing yet'}.
         
-        Do you have any suggestions, or should I proceed with my proposed strategy? (Type your suggestion or press Enter to proceed)
+        Do you have any suggestions, or should I proceed? (Type your suggestion or press Enter to proceed)
         """
         
-        # In a real system, we'd use a dedicated UI method.
-        # For now, we simulate this by calling the ClarifierAgent's prompt method if it exists.
-        if hasattr(ui_agent, 'ui') and hasattr(ui_agent.ui, 'prompt_for_input'):
-            user_feedback = ui_agent.ui.prompt_for_input(prompt)
-            if user_feedback and user_feedback.lower() not in ["", "yes", "proceed", "continue"]:
-                # User provided guidance, inject it into the next analysis
-                state.hypotheses_tested.append("User provided new guidance.")
+        user_feedback = ui_agent.ui.prompt_for_input(prompt)
+        if user_feedback and user_feedback.lower() not in ["", "yes", "proceed", "continue"]:
+            state.hypotheses_tested.append("User provided new guidance.")
+            if state.last_error_report:
                 state.last_error_report['user_guidance'] = user_feedback
-                state.confidence = 0.9 # Boost confidence based on user feedback
-            elif user_feedback.lower() in ["cancel", "stop", "exit"]:
-                return False
+            state.confidence = 0.9
+        elif user_feedback.lower() in ["cancel", "stop", "exit"]:
+            return False
         return True
