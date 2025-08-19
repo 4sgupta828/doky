@@ -72,15 +72,15 @@ def test_transparency_system():
         context.add_artifact("failed_test_report.json", 
                            {"summary": {"failed": 1}, "error": "TypeError"}, 
                            "test_task")
-        context.add_artifact("targeted_code_context.txt", 
-                           "def add(a, b): return a + b", 
+        context.add_artifact("targeted_code_context.json", 
+                           {"files": [{"path": "test.py", "content": "def add(a, b): return a + b"}], "metadata": {"total_files": 1}}, 
                            "context_task")
         
         # Create a debugging task
         debug_task = TaskNode(
             goal="Debug a failed test",
             assigned_agent="DebuggingAgent",
-            input_artifact_keys=["failed_test_report.json", "targeted_code_context.txt"]
+            input_artifact_keys=["failed_test_report.json", "targeted_code_context.json"]
         )
         
         print("📋 Starting debugging simulation...")

@@ -70,14 +70,14 @@ def test_debugging_agent_structured_tooling():
             "file": "test.py"
         }, "test")
         
-        context.add_artifact("targeted_code_context.txt", 
-                           "def test_function():\n    return True", "test")
+        context.add_artifact("targeted_code_context.json", 
+                           {"files": [{"path": "test.py", "content": "def test_function():\n    return True"}], "metadata": {"total_files": 1}}, "test")
         
         # Create debug task
         debug_task = TaskNode(
             goal="Debug failed test using structured tooling",
             assigned_agent="DebuggingAgent",
-            input_artifact_keys=["failed_test_report.json", "targeted_code_context.txt"]
+            input_artifact_keys=["failed_test_report.json", "targeted_code_context.json"]
         )
         
         print("⚙️  Executing DebuggingAgent with structured tooling...")

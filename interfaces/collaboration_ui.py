@@ -58,6 +58,9 @@ class CollaborationUI:
         os.makedirs(history_dir, exist_ok=True)
         history_file = os.path.join(history_dir, "command_history.txt")
         self.input_handler = get_input_handler(history_file)
+        
+        # Store the last displayed content for Ctrl+R functionality
+        self.last_full_content = {}
 
     def display_status(self, context: GlobalContext, execution_summary: str = None):
         """
@@ -193,34 +196,46 @@ class CollaborationUI:
         print("\nSession commands:")
         print("  /clear      - Reset conversation context (saves snapshot first)")
         print("  /reset      - Same as /clear")
+        print("  Ctrl+R      - Show full output history (complete code, diffs, results)")
         print("  exit        - Exit the session")
         print("  quit        - Same as exit")
         print("="*80)
 
-    def _display_artifact_content(self, artifact_key: str, content: Any):
+    def _display_artifact_content(self, artifact_key: str, content: Any, show_full: bool = False):
         """Helper method to format and display artifact content."""
         print(f"\n   📄 {Style.BOLD}{Style.Fg.CODE}{artifact_key}:{Style.RESET}")
         print(f"   " + "─" * 76)
         
+        # Store full content for later retrieval
+        content_key = f"artifact_{artifact_key}"
+        self.last_full_content[content_key] = content
+        
         if isinstance(content, str):
             # For text content, display with proper indentation
             lines = content.split('\n')
-            for line in lines[:50]:  # Limit to first 50 lines to avoid overwhelming output
+            display_lines = lines if show_full else lines[:50]
+            for line in display_lines:
                 print(f"   {line}")
-            if len(lines) > 50:
-                print(f"   {Style.Fg.MUTED}... ({len(lines) - 50} more lines){Style.RESET}")
+            if not show_full and len(lines) > 50:
+                print(f"   {Style.Fg.MUTED}... ({len(lines) - 50} more lines) - Press Ctrl+R to see full output{Style.RESET}")
         elif isinstance(content, (dict, list)):
             # For structured data, display as formatted JSON
             import json
             json_str = json.dumps(content, indent=2, ensure_ascii=False)
             lines = json_str.split('\n')
-            for line in lines[:30]:  # Limit to first 30 lines for JSON
+            display_lines = lines if show_full else lines[:30]
+            for line in display_lines:
                 print(f"   {line}")
-            if len(lines) > 30:
-                print(f"   {Style.Fg.MUTED}... ({len(lines) - 30} more lines){Style.RESET}")
+            if not show_full and len(lines) > 30:
+                print(f"   {Style.Fg.MUTED}... ({len(lines) - 30} more lines) - Press Ctrl+R to see full output{Style.RESET}")
         else:
             # For other types, show string representation
-            print(f"   {str(content)[:500]}{'...' if len(str(content)) > 500 else ''}")
+            str_content = str(content)
+            if show_full or len(str_content) <= 500:
+                print(f"   {str_content}")
+            else:
+                print(f"   {str_content[:500]}...")
+                print(f"   {Style.Fg.MUTED}... (truncated) - Press Ctrl+R to see full output{Style.RESET}")
         
         print(f"   " + "─" * 76)
 
@@ -255,32 +270,52 @@ class CollaborationUI:
             # Fallback to original display method
             self._display_original_intermediate_output(agent_name, output_type, content, preview_lines)
     
-    def _display_original_intermediate_output(self, agent_name: str, output_type: str, content: Any, preview_lines: int = 10):
+    def _display_original_intermediate_output(self, agent_name: str, output_type: str, content: Any, preview_lines: int = 10, show_full: bool = False):
         """Original intermediate output display method."""
         print(f"\n📄 {agent_name} generated {output_type}:")
         print(f"   " + "─" * 76)
         
+        # Store full content for later retrieval
+        content_key = f"output_{agent_name}_{output_type}"
+        self.last_full_content[content_key] = content
+        
         if isinstance(content, str):
             lines = content.split('\n')
-            for i, line in enumerate(lines[:preview_lines]):
-                print(f"   {i+1:3} | {line}")
-            if len(lines) > preview_lines:
-                print(f"   ... ({len(lines) - preview_lines} more lines)")
+            display_lines = lines if show_full else lines[:preview_lines]
+            for i, line in enumerate(display_lines, 1):
+                print(f"   {i:3} | {line}")
+            if not show_full and len(lines) > preview_lines:
+                print(f"   ... ({len(lines) - preview_lines} more lines) - Press Ctrl+R to see full output")
         else:
-            print(f"   {str(content)[:300]}{'...' if len(str(content)) > 300 else ''}")
+            str_content = str(content)
+            if show_full or len(str_content) <= 300:
+                print(f"   {str_content}")
+            else:
+                print(f"   {str_content[:300]}...")
+                print(f"   {Style.Fg.MUTED}... (truncated) - Press Ctrl+R to see full output{Style.RESET}")
         print(f"   " + "─" * 76)
     
-    def display_code_snippet(self, agent_name: str, content: str, filename: str = "code"):
+    def display_code_snippet(self, agent_name: str, content: str, filename: str = "code", show_full: bool = False):
         """Displays a code snippet with syntax highlighting and line numbers."""
         print(f"\n📝 {agent_name} generated {filename}:")
         print(f"   ┌" + "─" * 76 + "┐")
         
+        # Store full content for later retrieval
+        content_key = f"code_{agent_name}_{filename}"
+        self.last_full_content[content_key] = content
+        
         lines = content.split('\n')
         max_line_num_width = len(str(len(lines)))
         
-        for i, line in enumerate(lines, 1):
+        # Show full content or truncated based on show_full parameter
+        display_lines = lines if show_full else lines[:50]  # Limit to 50 lines for code
+        
+        for i, line in enumerate(display_lines, 1):
             line_num = f"{i:>{max_line_num_width}}"
             print(f"   │ {line_num} │ {line}")
+        
+        if not show_full and len(lines) > 50:
+            print(f"   │ ... ({len(lines) - 50} more lines) - Press Ctrl+R to see full output │")
         
         print(f"   └" + "─" * 76 + "┘")
         print(f"   Lines: {len(lines)}")
@@ -306,9 +341,13 @@ class CollaborationUI:
                 for i, line in enumerate(lines, 1):
                     print(f"   +{i:3} │ {line}")
     
-    def display_code_files(self, agent_name: str, files_data: dict):
+    def display_code_files(self, agent_name: str, files_data: dict, show_full: bool = False):
         """Displays multiple code files with syntax highlighting."""
         print(f"\n📁 {agent_name} generated {len(files_data)} files:")
+        
+        # Store full content for later retrieval
+        content_key = f"files_{agent_name}"
+        self.last_full_content[content_key] = files_data
         
         for file_path, content in files_data.items():
             print(f"\n   📄 {file_path}")
@@ -318,13 +357,14 @@ class CollaborationUI:
                 lines = content.split('\n')
                 max_line_num_width = len(str(len(lines))) if lines else 1
                 
-                # Show first 20 lines of each file
-                for i, line in enumerate(lines[:20], 1):
+                # Show full content or first 20 lines based on show_full parameter
+                display_lines = lines if show_full else lines[:20]
+                for i, line in enumerate(display_lines, 1):
                     line_num = f"{i:>{max_line_num_width}}"
                     print(f"   │ {line_num} │ {line}")
                 
-                if len(lines) > 20:
-                    print(f"   │ ... ({len(lines) - 20} more lines) ...")
+                if not show_full and len(lines) > 20:
+                    print(f"   │ ... ({len(lines) - 20} more lines) - Press Ctrl+R to see full output │")
                     
             print(f"   └" + "─" * 76 + "┘")
             print(f"   Lines: {len(content.split('\n')) if isinstance(content, str) else 0}")
@@ -376,6 +416,58 @@ class CollaborationUI:
                     else:
                         print(f"   {Style.Fg.WARNING}⚠️ Artifact '{artifact_key}' not found in context{Style.RESET}")
         print(f"{Style.Fg.MUTED}" + "-"*80 + f"{Style.RESET}")
+    
+    def display_full_output(self):
+        """Display all stored full content when Ctrl+R is pressed."""
+        if not self.last_full_content:
+            print(f"\n{Style.Fg.MUTED}No recent output to display in full.{Style.RESET}")
+            return
+        
+        print(f"\n{Style.BOLD}📜 FULL OUTPUT HISTORY (Ctrl+R){Style.RESET}")
+        print("=" * 80)
+        
+        for content_key, content in self.last_full_content.items():
+            print(f"\n{Style.BOLD}{Style.Fg.INFO}🔍 {content_key}:{Style.RESET}")
+            print("─" * 80)
+            
+            if content_key.startswith("artifact_"):
+                # Display artifact content in full
+                artifact_name = content_key.replace("artifact_", "")
+                self._display_artifact_content(artifact_name, content, show_full=True)
+            elif content_key.startswith("output_"):
+                # Display intermediate output in full
+                parts = content_key.replace("output_", "").split("_", 1)
+                agent_name = parts[0] if parts else "Unknown"
+                output_type = parts[1] if len(parts) > 1 else "output"
+                self._display_original_intermediate_output(agent_name, output_type, content, show_full=True)
+            elif content_key.startswith("code_"):
+                # Display code snippet in full
+                parts = content_key.replace("code_", "").split("_", 1)
+                agent_name = parts[0] if parts else "Unknown"
+                filename = parts[1] if len(parts) > 1 else "code"
+                self.display_code_snippet(agent_name, content, filename, show_full=True)
+            elif content_key.startswith("files_"):
+                # Display code files in full
+                agent_name = content_key.replace("files_", "")
+                self.display_code_files(agent_name, content, show_full=True)
+            else:
+                # Fallback display
+                if isinstance(content, str):
+                    lines = content.split('\n')
+                    for i, line in enumerate(lines, 1):
+                        print(f"{i:4} | {line}")
+                else:
+                    print(str(content))
+            
+            print("─" * 80)
+        
+        print(f"\n{Style.Fg.MUTED}End of full output history{Style.RESET}")
+        print("=" * 80)
+    
+    def clear_output_history(self):
+        """Clear the stored output history."""
+        self.last_full_content.clear()
+        print(f"\n{Style.Fg.INFO}Output history cleared.{Style.RESET}")
         
 # --- Self-Testing Block ---
 if __name__ == "__main__":

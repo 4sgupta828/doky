@@ -1,6 +1,8 @@
 # agents/context_builder.py
 import logging
+import json
 from typing import List
+from datetime import datetime
 
 # Foundational dependencies
 from .base import BaseAgent
@@ -41,12 +43,15 @@ class ContextBuilderAgent(BaseAgent):
             return AgentResponse(success=False, message=f"Artifact '{files_to_read_key}' does not contain a valid list of files.")
 
         # Read the content of each requested file.
-        context_content = ""
+        files_data = []
         read_files = []
         for file_path in files_list:
             content = context.workspace.get_file_content(file_path)
             if content is not None:
-                context_content += f"--- File: {file_path} ---\n```\n{content}\n```\n\n"
+                files_data.append({
+                    "path": file_path,
+                    "content": content
+                })
                 read_files.append(file_path)
             else:
                 logger.warning(f"Could not read file '{file_path}' while building context.")
@@ -54,10 +59,21 @@ class ContextBuilderAgent(BaseAgent):
         if not read_files:
             return AgentResponse(success=False, message="Could not read any of the specified files to build context.")
 
-        output_artifact_key = "targeted_code_context.txt"
+        # Create JSON structure
+        context_json = {
+            "files": files_data,
+            "metadata": {
+                "created_at": datetime.now().isoformat(),
+                "total_files": len(files_data),
+                "requested_files": len(files_list),
+                "successful_reads": len(read_files)
+            }
+        }
+
+        output_artifact_key = "targeted_code_context.json"
         context.add_artifact(
             key=output_artifact_key,
-            value=context_content,
+            value=context_json,
             source_task_id=current_task.task_id
         )
 
@@ -104,10 +120,13 @@ if __name__ == "__main__":
 
             self.assertTrue(response.success)
             self.assertIn("built context from 1 files", response.message)
-            context_artifact = self.context.get_artifact("targeted_code_context.txt")
-            self.assertIn("--- File: app.py ---", context_artifact)
-            self.assertIn("print('hello')", context_artifact)
-            self.assertNotIn("nonexistent.py", context_artifact)
+            context_artifact = self.context.get_artifact("targeted_code_context.json")
+            self.assertIsInstance(context_artifact, dict)
+            self.assertIn("files", context_artifact)
+            self.assertIn("metadata", context_artifact)
+            self.assertEqual(len(context_artifact["files"]), 1)
+            self.assertEqual(context_artifact["files"][0]["path"], "app.py")
+            self.assertEqual(context_artifact["files"][0]["content"], "print('hello')")
             logger.info("✅ test_context_builder_success: PASSED")
 
         def test_context_builder_missing_artifact(self):

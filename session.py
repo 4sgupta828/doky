@@ -79,6 +79,9 @@ class InteractiveSession:
                 # --- COMMAND DISPATCHER ---
                 if user_input.lower() in ["/clear", "/reset"]:
                     self._handle_clear_command()
+                elif user_input.lower() == "ctrl+r" or user_input == "\x12":  # Handle Ctrl+R
+                    self.ui.display_full_output()
+                    continue
                 elif user_input.startswith('@'):
                     self._handle_direct_command(user_input)
                 else:

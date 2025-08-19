@@ -45,6 +45,7 @@ class CommandHistory:
         readline.parse_and_bind('"\\C-e": end-of-line')       # Ctrl+E
         readline.parse_and_bind('"\\C-k": kill-line')         # Ctrl+K
         readline.parse_and_bind('"\\C-u": unix-line-discard') # Ctrl+U
+        readline.parse_and_bind('"\\C-r": "ctrl+r\\n"')       # Ctrl+R for full output
         
         # Set history length
         readline.set_history_length(self.max_history)
@@ -172,6 +173,7 @@ class EnhancedInput:
         print("   • Use ←/→ arrows to move cursor within line")
         print("   • Ctrl+A: beginning of line, Ctrl+E: end of line")
         print("   • Ctrl+K: clear to end, Ctrl+U: clear entire line")
+        print("   • Ctrl+R: show full output history (complete results)")
     
     def prompt(self, prompt_text: str) -> str:
         """Prompt for user input with enhanced features.

@@ -58,7 +58,7 @@ if __name__ == "__main__":
         }
         
         context.add_artifact("failed_test_report.json", json.dumps(failed_report), "test")
-        context.add_artifact("targeted_code_context.txt", test_file.read_text(), "test")
+        context.add_artifact("targeted_code_context.json", {"files": [{"path": str(test_file), "content": test_file.read_text()}], "metadata": {"total_files": 1}}, "test")
         
         print("✅ Test environment setup complete")
         print(f"   Workspace: {workspace_path}")

@@ -171,6 +171,7 @@ class RequirementsOrchestratorAgent(BaseAgent):
             try:
                 # Create a mock task node for legacy interface
                 task_node = type('TaskNode', (), {
+                    'task_id': 'req_clarification_task',
                     'goal': 'Clarify user requirements',
                     'assigned_agent': 'ClarifierAgent'
                 })()
@@ -253,6 +254,7 @@ class RequirementsOrchestratorAgent(BaseAgent):
             try:
                 # Create a mock task node for legacy interface
                 task_node = type('TaskNode', (), {
+                    'task_id': 'req_spec_generation_task',
                     'goal': 'Generate technical specification',
                     'assigned_agent': 'SpecGeneratorAgent'
                 })()

@@ -230,6 +230,7 @@ class DebuggingOrchestratorAgent(BaseAgent):
             try:
                 # Create a mock task node for legacy interface
                 task_node = type('TaskNode', (), {
+                    'task_id': 'debug_analysis_task',
                     'goal': 'Debug and identify issues',
                     'assigned_agent': 'DebuggingAgent'
                 })()

@@ -193,6 +193,7 @@ class DevelopmentOrchestratorAgent(BaseAgent):
             try:
                 # Create a mock task node for legacy interface
                 task_node = type('TaskNode', (), {
+                    'task_id': 'dev_planning_task',
                     'goal': 'Plan development implementation',
                     'assigned_agent': 'PlannerAgent'
                 })()
@@ -240,6 +241,7 @@ class DevelopmentOrchestratorAgent(BaseAgent):
             try:
                 # Create a mock task node for legacy interface
                 task_node = type('TaskNode', (), {
+                    'task_id': 'dev_implementation_task',
                     'goal': 'Implement code based on requirements',
                     'assigned_agent': 'CoderAgent'
                 })()
@@ -328,6 +330,7 @@ class DevelopmentOrchestratorAgent(BaseAgent):
             try:
                 # Create a mock task node for legacy interface
                 task_node = type('TaskNode', (), {
+                    'task_id': 'dev_quality_task',
                     'goal': 'Perform quality assurance review',
                     'assigned_agent': 'QualityOfficerAgent'
                 })()
@@ -595,6 +598,12 @@ class DevelopmentOrchestratorAgent(BaseAgent):
     def _check_code_test_alignment(self, orchestration_results: Dict[str, Any]) -> Dict[str, Any]:
         """Check alignment between code implementation and testing."""
         
+        if orchestration_results is None:
+            return {
+                "status": "failed",
+                "details": "Code test alignment check failed: orchestration_results is None"
+            }
+        
         coding_success = orchestration_results.get("coding_results", {}).get("success", False)
         testing_success = orchestration_results.get("testing_results", {}).get("success", False)
         
@@ -605,6 +614,12 @@ class DevelopmentOrchestratorAgent(BaseAgent):
 
     def _check_requirements_implementation(self, orchestration_results: Dict[str, Any]) -> Dict[str, Any]:
         """Check that requirements are properly implemented."""
+        
+        if orchestration_results is None:
+            return {
+                "status": "failed",
+                "details": "Requirements implementation check failed: orchestration_results is None"
+            }
         
         planning_success = orchestration_results.get("planning_results", {}).get("success", True)
         coding_success = orchestration_results.get("coding_results", {}).get("success", False)
@@ -617,7 +632,16 @@ class DevelopmentOrchestratorAgent(BaseAgent):
     def _check_quality_compliance(self, orchestration_results: Dict[str, Any]) -> Dict[str, Any]:
         """Check quality compliance across the development workflow."""
         
-        quality_success = orchestration_results.get("quality_results", {}).get("success", True)
+        if orchestration_results is None:
+            return {
+                "status": "failed",
+                "details": "Quality compliance check failed: orchestration_results is None"
+            }
+        
+        quality_results = orchestration_results.get("quality_results", {})
+        if quality_results is None:
+            quality_results = {}
+        quality_success = quality_results.get("success", True)
         
         return {
             "status": "passed" if quality_success else "failed",
@@ -626,6 +650,12 @@ class DevelopmentOrchestratorAgent(BaseAgent):
 
     def _check_documentation_completeness(self, orchestration_results: Dict[str, Any]) -> Dict[str, Any]:
         """Check completeness of documentation."""
+        
+        if orchestration_results is None:
+            return {
+                "status": "failed",
+                "details": "Documentation completeness check failed: orchestration_results is None"
+            }
         
         documentation_success = orchestration_results.get("documentation_results", {}).get("success", True)
         
@@ -636,6 +666,12 @@ class DevelopmentOrchestratorAgent(BaseAgent):
 
     def _check_basic_deployment_readiness(self, orchestration_results: Dict[str, Any], deployment_target: str) -> Dict[str, Any]:
         """Check basic deployment readiness."""
+        
+        if orchestration_results is None:
+            return {
+                "status": "failed",
+                "details": "Deployment readiness check failed: orchestration_results is None"
+            }
         
         critical_steps = ["coding"]
         all_critical_passed = all(

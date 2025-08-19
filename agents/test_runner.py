@@ -5,6 +5,7 @@ import subprocess
 import sys
 from pathlib import Path
 from typing import Dict, Any, List
+from datetime import datetime
 
 # Foundational dependencies
 from .base import BaseAgent
@@ -376,14 +377,34 @@ class TestRunnerAgent(BaseAgent):
                 # Create code context for requirements.txt analysis
                 try:
                     requirements_content = Path(debug_context["requirements_file"]).read_text()
-                    context.add_artifact("targeted_code_context.txt", 
-                                       f"# Requirements file content:\n{requirements_content}\n\n# Error context:\n{json.dumps(debug_context, indent=2)}", 
-                                       current_task.task_id)
+                    context_json = {
+                        "files": [
+                            {
+                                "path": debug_context["requirements_file"],
+                                "content": requirements_content
+                            }
+                        ],
+                        "metadata": {
+                            "created_at": datetime.now().isoformat(),
+                            "total_files": 1,
+                            "context_type": "setup_error",
+                            "error_context": debug_context
+                        }
+                    }
+                    context.add_artifact("targeted_code_context.json", context_json, current_task.task_id)
                 except Exception as e:
                     logger.warning(f"Could not read requirements file for context: {e}")
-                    context.add_artifact("targeted_code_context.txt", 
-                                       f"# Error context (requirements file unreadable):\n{json.dumps(debug_context, indent=2)}", 
-                                       current_task.task_id)
+                    context_json = {
+                        "files": [],
+                        "metadata": {
+                            "created_at": datetime.now().isoformat(),
+                            "total_files": 0,
+                            "context_type": "setup_error",
+                            "error_context": debug_context,
+                            "requirements_file_error": str(e)
+                        }
+                    }
+                    context.add_artifact("targeted_code_context.json", context_json, current_task.task_id)
                 
                 # Create failed test report format for DebuggingAgent compatibility
                 failed_report = {
@@ -399,7 +420,7 @@ class TestRunnerAgent(BaseAgent):
                 return AgentResponse(
                     success=False, 
                     message=f"{env_setup_result['message']} Artifacts created for DebuggingAgent analysis.",
-                    artifacts_generated=["setup_error_context.json", "targeted_code_context.txt", "failed_test_report.json"]
+                    artifacts_generated=["setup_error_context.json", "targeted_code_context.json", "failed_test_report.json"]
                 )
             
             # Hand over to DebuggingAgent for environment setup failures without debug context

@@ -483,10 +483,12 @@ class DebuggingAgent(BaseAgent):
                 self.report_thinking("No failed test report found. Will proceed with available evidence.")
             
             # Get code context
-            code_context = context.get_artifact("targeted_code_context.txt")
-            if code_context:
+            code_context = context.get_artifact("targeted_code_context.json")
+            if code_context and isinstance(code_context, dict) and "files" in code_context:
                 evidence["code_context"]["targeted_code"] = code_context
-                self.report_progress("Code context loaded", f"Loaded {len(str(code_context))} chars of relevant code context")
+                file_count = len(code_context["files"])
+                total_chars = sum(len(file_data["content"]) for file_data in code_context["files"])
+                self.report_progress("Code context loaded", f"Loaded {file_count} files with {total_chars} chars of relevant code context")
             else:
                 self.report_thinking("No targeted code context found. Analysis will be based on available artifacts.")
             
@@ -881,7 +883,7 @@ class DebuggingAgent(BaseAgent):
         
         # Get the failed test report and code context for analysis
         failed_report = context.get_artifact("failed_test_report.json")
-        code_context = context.get_artifact("targeted_code_context.txt")
+        code_context = context.get_artifact("targeted_code_context.json")
         
         if failed_report and isinstance(failed_report, str):
             try:
@@ -988,7 +990,7 @@ pass"""
         """Create a structured design change request with evidence and reasoning."""
         # Get evidence from context
         failed_report = context.get_artifact("failed_test_report.json")
-        code_context = context.get_artifact("targeted_code_context.txt")
+        code_context = context.get_artifact("targeted_code_context.json")
         
         if failed_report and isinstance(failed_report, str):
             try:
