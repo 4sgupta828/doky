@@ -228,13 +228,53 @@ class DebuggingAgent(BaseAgent):
         """
 
     def _gather_evidence(self, failed_report: Dict, code_context: Dict, env_data: Dict, context: GlobalContext) -> Dict:
-        self.report_thinking("Gathering evidence...")
-        evidence = {"initial_failure": failed_report, "code_context": code_context, "environment_data": env_data}
+        """
+        Phase 1: Gather comprehensive evidence, both passively and actively.
+        """
+        from agents.debugging_strategies import scan_for_logs # Import the new strategy
+
+        self.report_thinking("Gathering evidence: collecting failure reports, system context, and actively scanning for logs.")
+        
+        evidence = {
+            "initial_failure": failed_report,
+            "code_context": code_context,
+            "environment_data": env_data,
+            "log_scan_results": None, # Placeholder for active log scanning
+            "diagnostic_output": None # Placeholder for general diagnostics
+        }
+
+        # --- Passive Evidence Gathering (existing logic) ---
         tooling_agent = self.agent_registry.get("ToolingAgent")
         if tooling_agent:
-            result = self.call_agent_v2(tooling_agent, "Gather diagnostics", {"commands": ["git status --porcelain"], "purpose": "Check repo status"}, context)
-            if result.success: evidence["diagnostic_output"] = result.outputs
+            diagnostic_result = self.call_agent_v2(
+                target_agent=tooling_agent,
+                goal="Gather diagnostic evidence for debugging",
+                inputs={"commands": ["git status --porcelain", "ls -laR"], "purpose": "Gather repository status and file structure."},
+                global_context=context
+            )
+            if diagnostic_result.success:
+                evidence["diagnostic_output"] = diagnostic_result.outputs
+        
+        # --- Active Investigation: Scan for Logs ---
+        self.report_progress("Actively scanning for logs...")
+        try:
+            log_scan_result = scan_for_logs(
+                problem_description=state.problem_description,
+                agent_registry=self.agent_registry,
+                context=context
+            )
+            if log_scan_result.success and log_scan_result.outputs.get("stdout"):
+                self.report_thinking("Log scan found potentially relevant information.")
+                evidence["log_scan_results"] = log_scan_result.outputs
+            else:
+                self.report_thinking("Active log scan did not yield any results.")
+
+        except Exception as e:
+            logger.warning(f"Active log scanning failed: {e}")
+            evidence["log_scan_results"] = {"error": f"Log scanning failed: {e}"}
+
         return evidence
+
 
     def _execute_fix_strategy(self, hypothesis: Dict, evidence: Dict, context: GlobalContext) -> AgentResult:
         solution_type = hypothesis.get("solution_type", "DESIGN_CHANGE")
