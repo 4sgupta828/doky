@@ -47,6 +47,9 @@ from .requirements_orchestrator import RequirementsOrchestratorAgent
 from .development_orchestrator import DevelopmentOrchestratorAgent
 from .debugging_orchestrator import DebuggingOrchestratorAgent
 
+# Foundational Agents - New Architecture
+from .executor import ExecutorAgent
+
 # Get a logger instance for this module.
 logger = logging.getLogger(__name__)
 
@@ -79,6 +82,9 @@ AGENT_REGISTRY: Dict[str, Type[BaseAgent]] = {
     "RequirementsOrchestratorAgent": RequirementsOrchestratorAgent,
     "DevelopmentOrchestratorAgent": DevelopmentOrchestratorAgent,
     "DebuggingOrchestratorAgent": DebuggingOrchestratorAgent,
+
+    # Foundational Agents - New Architecture
+    "ExecutorAgent": ExecutorAgent,
 
     # Foundational Agents
     "PlannerAgent": PlannerAgent,
@@ -130,6 +136,8 @@ AGENT_ALIASES: Dict[str, str] = {
     "@requirements-orchestrator": "RequirementsOrchestratorAgent",
     "@development-orchestrator": "DevelopmentOrchestratorAgent",
     "@debugging-orchestrator": "DebuggingOrchestratorAgent",
+    # Foundational Agents - New Architecture
+    "@executor": "ExecutorAgent",
     # Foundational & Planning
     "@planner": "PlannerAgent",
     "@refiner": "PlanRefinementAgent",
@@ -213,7 +221,7 @@ if __name__ == "__main__":
         def test_registry_population(self):
             """Tests if the registry contains all the expected agents."""
             print("\n--- [Test Case 1: Registry Population] ---")
-            self.assertEqual(len(AGENT_REGISTRY), 26)  # Updated: removed MasterIntelligenceAgent, added FileSystemAgent
+            self.assertEqual(len(AGENT_REGISTRY), 27)  # Updated: added ExecutorAgent
             self.assertIn("PlannerAgent", AGENT_REGISTRY)
             self.assertIn("CoderAgent", AGENT_REGISTRY)
             self.assertIn("TestRunnerAgent", AGENT_REGISTRY)
