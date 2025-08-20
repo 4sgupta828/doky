@@ -36,7 +36,7 @@ from .environment_analysis import EnvironmentAnalysisAgent
 from .problem_analysis import ProblemAnalysisAgent
 
 # Specialized Tier (Write-only)
-from .code_modifier import CodeModifierAgent
+# Note: CodeModifierAgent was removed as it contained validation logic, not modification logic
 from .test_modifier import TestModifierAgent
 from .documentation import DocumentationAgent
 
@@ -70,7 +70,7 @@ AGENT_REGISTRY: Dict[str, Type[BaseAgent]] = {
     "ProblemAnalysisAgent": ProblemAnalysisAgent,
     
     # Specialized Tier - Write-only modification agents
-    "CodeModifierAgent": CodeModifierAgent,
+    # Note: CodeModifierAgent removed - contained validation logic, not modification
     "TestModifierAgent": TestModifierAgent,
     "DocumentationAgent": DocumentationAgent,
     
@@ -124,7 +124,7 @@ AGENT_ALIASES: Dict[str, str] = {
     "@env-analysis": "EnvironmentAnalysisAgent",
     "@problem-analysis": "ProblemAnalysisAgent",
     # Specialized Tier
-    "@code-modifier": "CodeModifierAgent",
+    # Note: @code-modifier alias removed with CodeModifierAgent
     "@test-modifier": "TestModifierAgent",
     "@docs": "DocumentationAgent",
     # Infrastructure Tier
