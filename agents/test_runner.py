@@ -13,8 +13,8 @@ logger = logging.getLogger(__name__)
 
 class TestRunnerAgent(BaseAgent):
     """
-    Orchestrates the execution of test suites. It discovers test files using the
-    FileSystemAgent and delegates command execution to the ToolingAgent.
+    Orchestrates the execution of test suites. It discovers test files, verifies
+    the environment, and delegates command execution to the ToolingAgent.
     """
 
     def __init__(self, agent_registry: Dict[str, Any] = None):
@@ -33,7 +33,7 @@ class TestRunnerAgent(BaseAgent):
 
     def execute_v2(self, goal: str, inputs: Dict[str, Any], global_context: GlobalContext) -> AgentResult:
         """
-        Discovers, runs, and analyzes tests.
+        Discovers, runs, and analyzes tests, including a pre-flight environment check.
         """
         self.validate_inputs(inputs)
         
@@ -44,6 +44,17 @@ class TestRunnerAgent(BaseAgent):
             return self.create_result(success=False, message="Required agents (FileSystemAgent, ToolingAgent) not available.")
 
         self.report_progress("Starting test execution", f"Goal: {goal}")
+
+        # --- NEW: Step 0: Pre-flight Environment Check ---
+        self.report_thinking("Performing pre-flight check to ensure test environment is ready.")
+        env_check_result = self._check_environment(tooling_agent, global_context)
+        if not env_check_result.success:
+            return self.create_result(
+                success=False,
+                message=f"Environment pre-flight check failed: {env_check_result.message}",
+                outputs={"error_type": "ENVIRONMENT_FAILURE"}
+            )
+        self.report_progress("Environment check passed", "Pytest is available.")
 
         # --- Step 1: Discover Test Files ---
         specific_files = inputs.get("specific_test_files")
@@ -87,14 +98,23 @@ class TestRunnerAgent(BaseAgent):
             global_context=global_context
         )
 
-        # Pytest returns exit code 1 for failed tests, which is not an execution error for us.
-        # Any other non-zero exit code is a real error.
         if not tooling_result.success and tooling_result.outputs.get("exit_code", 0) not in [0, 1]:
             return self.create_result(success=False, message=f"Test execution command failed: {tooling_result.message}")
 
         # --- Step 3: Analyze the Test Report ---
         return self._analyze_test_report(report_file, global_context)
 
+    def _check_environment(self, tooling_agent: BaseAgent, context: GlobalContext) -> AgentResult:
+        """Performs a pre-flight check for necessary testing tools like pytest."""
+        return self.call_agent_v2(
+            target_agent=tooling_agent,
+            goal="Check if pytest is installed.",
+            inputs={
+                "commands": ["python -m pytest --version"],
+                "purpose": "Environment Pre-flight Check"
+            },
+            global_context=context
+        )
 
     def _analyze_test_report(self, report_file: str, context: GlobalContext) -> AgentResult:
         """Analyzes the test_report.json file produced by pytest."""
