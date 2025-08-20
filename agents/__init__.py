@@ -78,7 +78,6 @@ AGENT_REGISTRY: Dict[str, Type[BaseAgent]] = {
     "EnvironmentModifierAgent": EnvironmentModifierAgent,
     "DependencyModifierAgent": DependencyModifierAgent,
     "ConfigurationModifierAgent": ConfigurationModifierAgent,
-    "ProcessExecutorAgent": ProcessExecutorAgent,
     
     # Coordination Tier - Orchestration agents
     "RequirementsOrchestratorAgent": RequirementsOrchestratorAgent,
@@ -131,7 +130,6 @@ AGENT_ALIASES: Dict[str, str] = {
     "@env-modifier": "EnvironmentModifierAgent",
     "@dependency": "DependencyModifierAgent",
     "@config": "ConfigurationModifierAgent",
-    "@process": "ProcessExecutorAgent",
     # Coordination Tier
     "@requirements-orchestrator": "RequirementsOrchestratorAgent",
     "@development-orchestrator": "DevelopmentOrchestratorAgent",
@@ -236,7 +234,6 @@ if __name__ == "__main__":
             self.assertIn("EnvironmentModifierAgent", AGENT_REGISTRY)
             self.assertIn("DependencyModifierAgent", AGENT_REGISTRY)
             self.assertIn("ConfigurationModifierAgent", AGENT_REGISTRY)
-            self.assertIn("ProcessExecutorAgent", AGENT_REGISTRY)
             logger.info(f"✅ Registry contains {len(AGENT_REGISTRY)} agents as expected.")
 
         def test_standard_agent_retrieval(self):
