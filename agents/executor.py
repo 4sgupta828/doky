@@ -9,17 +9,18 @@ from core.context import GlobalContext
 from core.models import AgentResult
 
 # Execution tools
-from tools.execution.test_execution_tools import (
-    TestExecutionContext, execute_tests, TestFramework, TestExecutionResult
+from tools.test_tools import (
+    TestExecutionContext, run_test_suite, TestFramework, TestExecutionResult
 )
-from tools.execution.validation_tools import (
-    ValidationContext, comprehensive_validation, ValidationType, ValidationResult
+from tools.code_validator import (
+    ValidationContext, comprehensive_validation, ValidationType, ValidationSummary
 )
-from tools.execution.shell_execution_tools import (
-    ShellExecutionContext, execute_commands, ShellCommand, ExecutionMode, ShellExecutionResult
+from tools.shell import (
+    ShellExecutionContext, execute_commands, ShellCommand, ExecutionMode, ExecutionResult
 )
-from tools.execution.filesystem_tools import (
-    FilesystemContext, execute_filesystem_operation, FileOperation, FilesystemResult
+from tools.file_system_tools import (
+    read_file, write_file, create_path, delete_path, copy_path, move_path, 
+    discover_files, FilesystemResult, FileOperation
 )
 from tools.execution.environment_tools import (
     EnvironmentContext, execute_environment_operation, EnvironmentOperation, EnvironmentResult
@@ -186,11 +187,11 @@ class ExecutorAgent(BaseAgent):
             additional_args=inputs.get("additional_args", [])
         )
         
-        return execute_tests(context)
+        return run_test_suite(context)
 
-    def _execute_validation_operation(self, inputs: Dict[str, Any], working_directory: str) -> ValidationResult:
+    def _execute_validation_operation(self, inputs: Dict[str, Any], working_directory: str) -> ValidationSummary:
         """Execute code validation operations."""
-        validation_types_input = inputs.get("validation_types", ["syntax", "imports"])
+        validation_types_input = inputs.get("validation_types", ["syntax_check", "import_check"])
         validation_types = [ValidationType(vtype) for vtype in validation_types_input]
         
         context = ValidationContext(
@@ -205,7 +206,7 @@ class ExecutorAgent(BaseAgent):
         
         return comprehensive_validation(context)
 
-    def _execute_shell_operation(self, inputs: Dict[str, Any], working_directory: str) -> ShellExecutionResult:
+    def _execute_shell_operation(self, inputs: Dict[str, Any], working_directory: str) -> ExecutionResult:
         """Execute shell command operations."""
         commands_input = inputs.get("commands", [])
         commands = []
@@ -238,19 +239,57 @@ class ExecutorAgent(BaseAgent):
         """Execute filesystem operations."""
         file_operation = inputs.get("file_operation", "read")
         
-        context = FilesystemContext(
-            operation=FileOperation(file_operation),
-            working_directory=working_directory,
-            source_path=inputs.get("source_path"),
-            target_path=inputs.get("target_path"),
-            content=inputs.get("content"),
-            file_patterns=inputs.get("file_patterns", ["*"]),
-            create_backup=inputs.get("create_backup", False),
-            recursive=inputs.get("recursive", False),
-            timeout_seconds=inputs.get("timeout_seconds", 120)
-        )
-        
-        return execute_filesystem_operation(context)
+        if file_operation == "read":
+            return read_file(
+                file_path=inputs.get("source_path", ""),
+                working_directory=working_directory
+            )
+        elif file_operation == "write":
+            return write_file(
+                file_path=inputs.get("target_path", ""),
+                content=inputs.get("content", ""),
+                backup_enabled=inputs.get("create_backup", False),
+                working_directory=working_directory
+            )
+        elif file_operation == "create":
+            return create_path(
+                path=inputs.get("target_path", ""),
+                content=inputs.get("content"),
+                working_directory=working_directory
+            )
+        elif file_operation == "delete":
+            return delete_path(
+                path=inputs.get("source_path", ""),
+                backup_enabled=inputs.get("create_backup", False),
+                working_directory=working_directory
+            )
+        elif file_operation == "copy":
+            return copy_path(
+                source_path=inputs.get("source_path", ""),
+                destination_path=inputs.get("target_path", ""),
+                working_directory=working_directory
+            )
+        elif file_operation == "move":
+            return move_path(
+                source_path=inputs.get("source_path", ""),
+                destination_path=inputs.get("target_path", ""),
+                working_directory=working_directory
+            )
+        elif file_operation == "discover":
+            return discover_files(
+                search_path=inputs.get("source_path", "."),
+                patterns=inputs.get("file_patterns", ["*"]),
+                recursive=inputs.get("recursive", True),
+                working_directory=working_directory
+            )
+        else:
+            # Create a failed result for unknown operations
+            return FilesystemResult(
+                success=False,
+                message=f"Unknown filesystem operation: {file_operation}",
+                operation=FileOperation.READ,  # Default value
+                error_details=f"Supported operations: read, write, create, delete, copy, move, discover"
+            )
 
     def _execute_environment_operation(self, inputs: Dict[str, Any], working_directory: str) -> EnvironmentResult:
         """Execute environment management operations."""
@@ -302,41 +341,42 @@ class ExecutorAgent(BaseAgent):
         # Add type-specific outputs
         if isinstance(result, TestExecutionResult):
             outputs.update({
-                "framework_used": result.framework_used.value if result.framework_used else None,
+                "framework_used": result.framework.value if result.framework else None,
+                "test_files_discovered": result.test_files_discovered,
+                "test_files_executed": result.test_files_executed,
                 "tests_run": result.tests_run,
                 "tests_passed": result.tests_passed,
                 "tests_failed": result.tests_failed,
-                "test_output": result.test_output,
-                "coverage_report": result.coverage_report,
-                "execution_time": result.execution_time
+                "tests_skipped": result.tests_skipped,
+                "test_output": result.output,
+                "execution_time": result.execution_time,
+                "coverage_percentage": result.coverage_percentage
             })
         
-        elif isinstance(result, ValidationResult):
+        elif isinstance(result, ValidationSummary):
             outputs.update({
-                "validations_performed": [v.value for v in result.validations_performed],
-                "syntax_valid": result.syntax_valid,
-                "imports_valid": result.imports_valid,
-                "execution_valid": result.execution_valid,
-                "linting_passed": result.linting_passed,
-                "type_check_passed": result.type_check_passed,
-                "validation_details": result.validation_details,
-                "error_count": result.error_count,
-                "warning_count": result.warning_count
+                "overall_success": result.overall_success,
+                "total_files": result.total_files,
+                "passed_validations": result.passed_validations,
+                "failed_validations": result.failed_validations,
+                "warnings": result.warnings,
+                "execution_time": result.execution_time,
+                "summary_message": result.summary_message,
+                "validation_reports": len(result.reports) if result.reports else 0
             })
         
-        elif isinstance(result, ShellExecutionResult):
+        elif isinstance(result, ExecutionResult):
             outputs.update({
                 "commands_executed": len(result.command_results),
                 "successful_commands": sum(1 for cmd in result.command_results if cmd.success),
                 "failed_commands": sum(1 for cmd in result.command_results if not cmd.success),
-                "execution_mode": result.execution_mode.value,
                 "total_execution_time": result.total_execution_time,
                 "command_results": [
                     {
-                        "command": cmd.command.command,
+                        "command": cmd.command,
                         "success": cmd.success,
-                        "return_code": cmd.return_code,
-                        "output": cmd.output,
+                        "exit_code": cmd.exit_code,
+                        "output": cmd.stdout,
                         "execution_time": cmd.execution_time
                     } for cmd in result.command_results
                 ]

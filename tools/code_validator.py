@@ -1,220 +1,540 @@
-# tools/code_validator.py
-import ast
-import logging
-import sys
-import os
-import importlib.util
-from pathlib import Path
-from typing import Dict, Any, List, Optional
+# tools/execution/validation_tools.py
+"""
+Validation tools for code execution validation, syntax checking, and functionality testing.
+Extracted from ExecutionValidatorAgent to provide atomic, reusable validation capabilities.
+"""
 
-# Get a logger instance for this module
+import ast
+import importlib.util
+import logging
+import os
+import subprocess
+import sys
+import tempfile
+from dataclasses import dataclass
+from enum import Enum
+from pathlib import Path
+from typing import Dict, Any, List, Optional, Tuple
+
 logger = logging.getLogger(__name__)
 
+class ValidationType(Enum):
+    """Types of validation operations."""
+    SYNTAX_CHECK = "syntax_check"
+    IMPORT_CHECK = "import_check"
+    EXECUTION_CHECK = "execution_check"
+    TEST_EXECUTION = "test_execution"
+    LINTING = "linting"
+    TYPE_CHECK = "type_check"
 
-def validate_syntax(code_files: Dict[str, str]) -> Dict[str, Any]:
-    """
-    Validate Python syntax for all code files.
+class ValidationResult(Enum):
+    """Validation results."""
+    PASSED = "passed"
+    FAILED = "failed"
+    WARNING = "warning"
+    SKIPPED = "skipped"
+
+@dataclass
+class ValidationContext:
+    """Context for validation operations."""
+    code_files: Dict[str, str]
+    working_directory: str = "."
+    python_executable: Optional[str] = None
+    timeout_seconds: int = 30
+    test_script: Optional[str] = None
+    validation_types: List[ValidationType] = None
+    strict_mode: bool = False
     
-    Args:
-        code_files: Dictionary mapping file paths to their content
-        
-    Returns:
-        Dictionary containing validation results with success status, details, errors, and passed files
-    """
-    details = []
-    errors = []
-    passed_files = []
+    def __post_init__(self):
+        if self.validation_types is None:
+            self.validation_types = [
+                ValidationType.SYNTAX_CHECK,
+                ValidationType.IMPORT_CHECK
+            ]
+
+@dataclass
+class ValidationReport:
+    """Detailed validation report for a single file."""
+    file_path: str
+    validation_type: ValidationType
+    result: ValidationResult
+    message: str
+    details: List[str] = None
+    line_number: Optional[int] = None
+    
+    def __post_init__(self):
+        if self.details is None:
+            self.details = []
+
+@dataclass
+class ValidationSummary:
+    """Summary of all validation operations."""
+    overall_success: bool
+    total_files: int
+    passed_validations: int
+    failed_validations: int
+    warnings: int
+    execution_time: float
+    reports: List[ValidationReport] = None
+    summary_message: str = ""
+    
+    def __post_init__(self):
+        if self.reports is None:
+            self.reports = []
+
+def validate_python_syntax(code_files: Dict[str, str]) -> List[ValidationReport]:
+    """Validate Python syntax for all provided code files."""
+    reports = []
     
     logger.info(f"Validating syntax for {len(code_files)} files")
     
     for file_path, content in code_files.items():
         try:
-            # Attempt to compile the code
-            compile(content, file_path, 'exec')
-            details.append(f"✓ Syntax valid: {file_path}")
-            passed_files.append(file_path)
+            # Attempt to parse the AST
+            ast.parse(content)
+            
+            reports.append(ValidationReport(
+                file_path=file_path,
+                validation_type=ValidationType.SYNTAX_CHECK,
+                result=ValidationResult.PASSED,
+                message=f"Syntax validation passed",
+                details=[f"Valid Python syntax: {file_path}"]
+            ))
             
         except SyntaxError as e:
-            error_msg = f"Syntax error in {file_path} line {e.lineno}: {e.msg}"
-            if hasattr(e, 'text') and e.text:
-                error_msg += f" | Code: {e.text.strip()}"
-            errors.append(error_msg)
-            details.append(f"✗ {error_msg}")
-            logger.error(error_msg)
+            reports.append(ValidationReport(
+                file_path=file_path,
+                validation_type=ValidationType.SYNTAX_CHECK,
+                result=ValidationResult.FAILED,
+                message=f"Syntax error: {e.msg}",
+                details=[f"Syntax error in {file_path} at line {e.lineno}: {e.msg}"],
+                line_number=e.lineno
+            ))
             
         except Exception as e:
-            error_msg = f"Compilation error in {file_path}: {e}"
-            errors.append(error_msg)
-            details.append(f"✗ {error_msg}")
-            logger.error(error_msg)
+            reports.append(ValidationReport(
+                file_path=file_path,
+                validation_type=ValidationType.SYNTAX_CHECK,
+                result=ValidationResult.FAILED,
+                message=f"Compilation error: {str(e)}",
+                details=[f"Compilation error in {file_path}: {str(e)}"]
+            ))
     
-    success = len(errors) == 0
-    
-    if success:
-        details.append(f"✓ All {len(code_files)} files have valid Python syntax")
-    else:
-        details.append(f"✗ {len(errors)} files have syntax errors")
-    
-    return {
-        "success": success,
-        "details": details,
-        "errors": errors,
-        "passed_files": passed_files
-    }
+    return reports
 
-
-def validate_imports(code_files: Dict[str, str], python_path: Optional[str] = None) -> Dict[str, Any]:
-    """
-    Validate that all imports in the code files can be resolved.
-    
-    Args:
-        code_files: Dictionary mapping file paths to their content
-        python_path: Optional additional path to add to sys.path for import resolution
-        
-    Returns:
-        Dictionary containing validation results with success status, details, errors, and passed files
-    """
-    details = []
-    errors = []
-    passed_files = []
+def validate_imports(
+    code_files: Dict[str, str], 
+    working_directory: str = ".",
+    python_path: Optional[List[str]] = None
+) -> List[ValidationReport]:
+    """Validate that all imports in the code can be resolved."""
+    reports = []
     
     logger.info(f"Validating imports for {len(code_files)} files")
     
-    # Temporarily modify Python path if provided
-    original_path = sys.path[:]
-    if python_path and os.path.exists(python_path):
-        sys.path.insert(0, python_path)
+    # Setup environment
+    original_cwd = os.getcwd()
+    original_path = sys.path.copy()
     
     try:
+        os.chdir(working_directory)
+        
+        # Add working directory and any additional paths
+        if working_directory not in sys.path:
+            sys.path.insert(0, working_directory)
+        
+        if python_path:
+            for path in python_path:
+                if path not in sys.path:
+                    sys.path.insert(0, path)
+        
         for file_path, content in code_files.items():
-            file_errors = []
-            
             try:
-                # Parse the AST to extract import statements
-                tree = ast.parse(content, filename=file_path)
-                imports = extract_imports_from_ast(tree)
+                # Extract imports using AST
+                imports_info = _extract_imports_from_content(content)
                 
-                # Test each import
-                for import_info in imports:
+                failed_imports = []
+                successful_imports = []
+                
+                for import_info in imports_info:
                     try:
                         if import_info["type"] == "import":
-                            # Test "import module"
-                            spec = importlib.util.find_spec(import_info["module"])
-                            if spec is None:
-                                file_errors.append(f"Cannot resolve import: {import_info['module']}")
-                                
-                        elif import_info["type"] == "from_import":
-                            # Test "from module import item"
-                            spec = importlib.util.find_spec(import_info["module"])
-                            if spec is None:
-                                file_errors.append(f"Cannot resolve module: {import_info['module']}")
-                                
-                    except (ImportError, ModuleNotFoundError) as e:
-                        file_errors.append(f"Import error: {e}")
+                            # import module
+                            importlib.import_module(import_info["module"])
+                            successful_imports.append(import_info["module"])
+                        elif import_info["type"] == "from":
+                            # from module import name
+                            module = importlib.import_module(import_info["module"])
+                            if hasattr(module, import_info["name"]):
+                                successful_imports.append(f"{import_info['module']}.{import_info['name']}")
+                            else:
+                                failed_imports.append(f"{import_info['module']}.{import_info['name']} (attribute not found)")
+                        
+                    except ImportError as e:
+                        failed_imports.append(f"{import_info['module']} ({str(e)})")
                     except Exception as e:
-                        file_errors.append(f"Import validation error: {e}")
+                        failed_imports.append(f"{import_info['module']} (error: {str(e)})")
                 
-                if not file_errors:
-                    details.append(f"✓ All imports valid: {file_path}")
-                    passed_files.append(file_path)
+                if failed_imports:
+                    reports.append(ValidationReport(
+                        file_path=file_path,
+                        validation_type=ValidationType.IMPORT_CHECK,
+                        result=ValidationResult.FAILED,
+                        message=f"Import validation failed: {len(failed_imports)} imports failed",
+                        details=failed_imports + [f"Successful imports: {', '.join(successful_imports)}"]
+                    ))
                 else:
-                    for error in file_errors:
-                        details.append(f"✗ {file_path}: {error}")
-                    errors.extend(file_errors)
+                    reports.append(ValidationReport(
+                        file_path=file_path,
+                        validation_type=ValidationType.IMPORT_CHECK,
+                        result=ValidationResult.PASSED,
+                        message=f"All imports resolved successfully",
+                        details=[f"Successfully resolved {len(successful_imports)} imports"]
+                    ))
                     
-            except SyntaxError as e:
-                error_msg = f"Cannot parse {file_path} for import validation: {e}"
-                details.append(f"✗ {error_msg}")
-                errors.append(error_msg)
-                
+            except Exception as e:
+                reports.append(ValidationReport(
+                    file_path=file_path,
+                    validation_type=ValidationType.IMPORT_CHECK,
+                    result=ValidationResult.FAILED,
+                    message=f"Import validation error: {str(e)}",
+                    details=[f"Error analyzing imports in {file_path}: {str(e)}"]
+                ))
+    
     finally:
-        # Restore original Python path
-        sys.path[:] = original_path
+        # Restore environment
+        os.chdir(original_cwd)
+        sys.path = original_path
     
-    success = len(errors) == 0
-    
-    if success:
-        details.append(f"✓ All imports in {len(code_files)} files are valid")
-    else:
-        details.append(f"✗ {len(errors)} import issues found")
-    
-    return {
-        "success": success,
-        "details": details,
-        "errors": errors,
-        "passed_files": passed_files
-    }
+    return reports
 
-
-def validate_ast_structure(code_files: Dict[str, str]) -> Dict[str, Any]:
-    """
-    Perform AST-based structural validation of code files.
+def validate_code_execution(
+    code_files: Dict[str, str],
+    working_directory: str = ".",
+    timeout_seconds: int = 30,
+    python_executable: Optional[str] = None
+) -> List[ValidationReport]:
+    """Validate that code can be executed without runtime errors."""
+    reports = []
     
-    Args:
-        code_files: Dictionary mapping file paths to their content
-        
-    Returns:
-        Dictionary containing validation results with success status, details, errors, and passed files
-    """
-    details = []
-    errors = []
-    passed_files = []
+    if python_executable is None:
+        python_executable = sys.executable
     
-    logger.info(f"Analyzing AST structure for {len(code_files)} files")
+    logger.info(f"Validating execution for {len(code_files)} files")
     
     for file_path, content in code_files.items():
-        file_errors = []
-        
         try:
-            tree = ast.parse(content, filename=file_path)
+            # Create a temporary file
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False) as temp_file:
+                temp_file.write(content)
+                temp_file_path = temp_file.name
             
-            # Check for common structural issues
-            issues = analyze_ast_issues(tree, file_path)
+            try:
+                # Execute the file
+                result = subprocess.run(
+                    [python_executable, temp_file_path],
+                    capture_output=True,
+                    text=True,
+                    timeout=timeout_seconds,
+                    cwd=working_directory
+                )
+                
+                if result.returncode == 0:
+                    reports.append(ValidationReport(
+                        file_path=file_path,
+                        validation_type=ValidationType.EXECUTION_CHECK,
+                        result=ValidationResult.PASSED,
+                        message="Code executed successfully",
+                        details=[
+                            f"Exit code: 0",
+                            f"Output: {result.stdout.strip()}" if result.stdout.strip() else "No output"
+                        ]
+                    ))
+                else:
+                    reports.append(ValidationReport(
+                        file_path=file_path,
+                        validation_type=ValidationType.EXECUTION_CHECK,
+                        result=ValidationResult.FAILED,
+                        message=f"Code execution failed (exit code {result.returncode})",
+                        details=[
+                            f"Exit code: {result.returncode}",
+                            f"Error output: {result.stderr.strip()}" if result.stderr.strip() else "No error output",
+                            f"Standard output: {result.stdout.strip()}" if result.stdout.strip() else "No standard output"
+                        ]
+                    ))
+            finally:
+                # Clean up temp file
+                try:
+                    os.unlink(temp_file_path)
+                except Exception:
+                    pass
+                    
+        except subprocess.TimeoutExpired:
+            reports.append(ValidationReport(
+                file_path=file_path,
+                validation_type=ValidationType.EXECUTION_CHECK,
+                result=ValidationResult.FAILED,
+                message=f"Code execution timed out after {timeout_seconds} seconds",
+                details=[f"Execution timeout: {timeout_seconds}s"]
+            ))
             
-            if not issues:
-                details.append(f"✓ AST structure valid: {file_path}")
-                passed_files.append(file_path)
-            else:
-                for issue in issues:
-                    details.append(f"✗ {file_path}: {issue}")
-                    file_errors.append(issue)
-                
-            errors.extend(file_errors)
-                
-        except SyntaxError as e:
-            error_msg = f"AST parsing failed for {file_path}: {e}"
-            details.append(f"✗ {error_msg}")
-            errors.append(error_msg)
         except Exception as e:
-            error_msg = f"AST analysis error for {file_path}: {e}"
-            details.append(f"✗ {error_msg}")
-            errors.append(error_msg)
+            reports.append(ValidationReport(
+                file_path=file_path,
+                validation_type=ValidationType.EXECUTION_CHECK,
+                result=ValidationResult.FAILED,
+                message=f"Execution validation error: {str(e)}",
+                details=[f"Error executing {file_path}: {str(e)}"]
+            ))
     
-    success = len(errors) == 0
-    
-    if success:
-        details.append(f"✓ All {len(code_files)} files have valid AST structure")
-    else:
-        details.append(f"✗ {len(errors)} structural issues found")
-    
-    return {
-        "success": success,
-        "details": details,
-        "errors": errors,
-        "passed_files": passed_files
-    }
+    return reports
 
-
-def extract_imports_from_ast(tree: ast.AST) -> List[Dict[str, Any]]:
-    """
-    Extract import statements from AST.
+def validate_with_tests(
+    test_script_path: str,
+    working_directory: str = ".",
+    timeout_seconds: int = 60,
+    python_executable: Optional[str] = None
+) -> ValidationReport:
+    """Validate code by running a test script."""
+    if python_executable is None:
+        python_executable = sys.executable
     
-    Args:
-        tree: Parsed AST tree
+    logger.info(f"Running test script: {test_script_path}")
+    
+    if not os.path.exists(test_script_path):
+        return ValidationReport(
+            file_path=test_script_path,
+            validation_type=ValidationType.TEST_EXECUTION,
+            result=ValidationResult.FAILED,
+            message=f"Test script not found: {test_script_path}",
+            details=[f"File does not exist: {test_script_path}"]
+        )
+    
+    try:
+        result = subprocess.run(
+            [python_executable, test_script_path],
+            capture_output=True,
+            text=True,
+            timeout=timeout_seconds,
+            cwd=working_directory
+        )
         
-    Returns:
-        List of dictionaries containing import information
-    """
+        if result.returncode == 0:
+            return ValidationReport(
+                file_path=test_script_path,
+                validation_type=ValidationType.TEST_EXECUTION,
+                result=ValidationResult.PASSED,
+                message="Test script executed successfully",
+                details=[
+                    f"Exit code: 0",
+                    f"Test output: {result.stdout.strip()}" if result.stdout.strip() else "No output"
+                ]
+            )
+        else:
+            return ValidationReport(
+                file_path=test_script_path,
+                validation_type=ValidationType.TEST_EXECUTION,
+                result=ValidationResult.FAILED,
+                message=f"Test script failed (exit code {result.returncode})",
+                details=[
+                    f"Exit code: {result.returncode}",
+                    f"Error output: {result.stderr.strip()}" if result.stderr.strip() else "No error output",
+                    f"Standard output: {result.stdout.strip()}" if result.stdout.strip() else "No standard output"
+                ]
+            )
+            
+    except subprocess.TimeoutExpired:
+        return ValidationReport(
+            file_path=test_script_path,
+            validation_type=ValidationType.TEST_EXECUTION,
+            result=ValidationResult.FAILED,
+            message=f"Test script timed out after {timeout_seconds} seconds",
+            details=[f"Test timeout: {timeout_seconds}s"]
+        )
+        
+    except Exception as e:
+        return ValidationReport(
+            file_path=test_script_path,
+            validation_type=ValidationType.TEST_EXECUTION,
+            result=ValidationResult.FAILED,
+            message=f"Test execution error: {str(e)}",
+            details=[f"Error running test script: {str(e)}"]
+        )
+
+def run_linting(
+    code_files: Dict[str, str],
+    working_directory: str = ".",
+    linter: str = "flake8",
+    python_executable: Optional[str] = None
+) -> List[ValidationReport]:
+    """Run linting tools on code files."""
+    reports = []
+    
+    if python_executable is None:
+        python_executable = sys.executable
+    
+    logger.info(f"Running {linter} on {len(code_files)} files")
+    
+    for file_path, content in code_files.items():
+        try:
+            # Create temporary file
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False) as temp_file:
+                temp_file.write(content)
+                temp_file_path = temp_file.name
+            
+            try:
+                # Run linter
+                if linter == "flake8":
+                    cmd = [python_executable, "-m", "flake8", temp_file_path]
+                elif linter == "pylint":
+                    cmd = [python_executable, "-m", "pylint", temp_file_path]
+                elif linter == "pycodestyle":
+                    cmd = [python_executable, "-m", "pycodestyle", temp_file_path]
+                else:
+                    reports.append(ValidationReport(
+                        file_path=file_path,
+                        validation_type=ValidationType.LINTING,
+                        result=ValidationResult.SKIPPED,
+                        message=f"Unsupported linter: {linter}",
+                        details=[f"Linter '{linter}' not supported"]
+                    ))
+                    continue
+                
+                result = subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                    cwd=working_directory
+                )
+                
+                if result.returncode == 0:
+                    reports.append(ValidationReport(
+                        file_path=file_path,
+                        validation_type=ValidationType.LINTING,
+                        result=ValidationResult.PASSED,
+                        message=f"Linting passed ({linter})",
+                        details=[f"No linting issues found"]
+                    ))
+                else:
+                    # Parse linting output
+                    issues = result.stdout.strip().split('\n') if result.stdout.strip() else []
+                    reports.append(ValidationReport(
+                        file_path=file_path,
+                        validation_type=ValidationType.LINTING,
+                        result=ValidationResult.WARNING,  # Linting issues are warnings by default
+                        message=f"Linting issues found ({linter}): {len(issues)} issues",
+                        details=issues
+                    ))
+                    
+            finally:
+                # Clean up temp file
+                try:
+                    os.unlink(temp_file_path)
+                except Exception:
+                    pass
+                    
+        except subprocess.TimeoutExpired:
+            reports.append(ValidationReport(
+                file_path=file_path,
+                validation_type=ValidationType.LINTING,
+                result=ValidationResult.FAILED,
+                message=f"Linting timed out",
+                details=[f"Linter {linter} timed out after 30 seconds"]
+            ))
+            
+        except Exception as e:
+            reports.append(ValidationReport(
+                file_path=file_path,
+                validation_type=ValidationType.LINTING,
+                result=ValidationResult.FAILED,
+                message=f"Linting error: {str(e)}",
+                details=[f"Error running {linter}: {str(e)}"]
+            ))
+    
+    return reports
+
+def comprehensive_validation(context: ValidationContext) -> ValidationSummary:
+    """Run comprehensive validation on code files."""
+    import time
+    
+    start_time = time.time()
+    all_reports = []
+    
+    # Run requested validation types
+    for validation_type in context.validation_types:
+        if validation_type == ValidationType.SYNTAX_CHECK:
+            reports = validate_python_syntax(context.code_files)
+            all_reports.extend(reports)
+            
+        elif validation_type == ValidationType.IMPORT_CHECK:
+            reports = validate_imports(context.code_files, context.working_directory)
+            all_reports.extend(reports)
+            
+        elif validation_type == ValidationType.EXECUTION_CHECK:
+            reports = validate_code_execution(
+                context.code_files,
+                context.working_directory,
+                context.timeout_seconds,
+                context.python_executable
+            )
+            all_reports.extend(reports)
+            
+        elif validation_type == ValidationType.TEST_EXECUTION and context.test_script:
+            report = validate_with_tests(
+                context.test_script,
+                context.working_directory,
+                context.timeout_seconds,
+                context.python_executable
+            )
+            all_reports.append(report)
+            
+        elif validation_type == ValidationType.LINTING:
+            reports = run_linting(
+                context.code_files,
+                context.working_directory,
+                "flake8",  # Default linter
+                context.python_executable
+            )
+            all_reports.extend(reports)
+    
+    # Analyze results
+    passed_count = sum(1 for r in all_reports if r.result == ValidationResult.PASSED)
+    failed_count = sum(1 for r in all_reports if r.result == ValidationResult.FAILED)
+    warning_count = sum(1 for r in all_reports if r.result == ValidationResult.WARNING)
+    
+    # Determine overall success
+    if context.strict_mode:
+        overall_success = failed_count == 0 and warning_count == 0
+    else:
+        overall_success = failed_count == 0
+    
+    execution_time = time.time() - start_time
+    
+    # Create summary message
+    if overall_success:
+        summary_message = f"Validation PASSED - {passed_count}/{len(all_reports)} checks successful"
+    else:
+        summary_message = f"Validation FAILED - {failed_count} failures, {warning_count} warnings"
+    
+    return ValidationSummary(
+        overall_success=overall_success,
+        total_files=len(context.code_files),
+        passed_validations=passed_count,
+        failed_validations=failed_count,
+        warnings=warning_count,
+        execution_time=execution_time,
+        reports=all_reports,
+        summary_message=summary_message
+    )
+
+def _extract_imports_from_content(content: str) -> List[Dict[str, str]]:
+    """Extract import information from code content using AST."""
+    try:
+        tree = ast.parse(content)
+    except SyntaxError:
+        return []  # Can't parse, return empty
+    
     imports = []
     
     for node in ast.walk(tree):
@@ -223,180 +543,66 @@ def extract_imports_from_ast(tree: ast.AST) -> List[Dict[str, Any]]:
                 imports.append({
                     "type": "import",
                     "module": alias.name,
-                    "alias": alias.asname
+                    "name": alias.name,
+                    "as_name": alias.asname
                 })
+                
         elif isinstance(node, ast.ImportFrom):
-            if node.module:  # Skip relative imports without module
+            module = node.module or ""
+            for alias in node.names:
                 imports.append({
-                    "type": "from_import",
-                    "module": node.module,
-                    "names": [alias.name for alias in node.names]
+                    "type": "from",
+                    "module": module,
+                    "name": alias.name,
+                    "as_name": alias.asname
                 })
     
     return imports
 
+def validate_file_exists(file_path: str, working_directory: str = ".") -> ValidationReport:
+    """Validate that a specific file exists."""
+    full_path = Path(working_directory) / file_path
+    
+    if full_path.exists():
+        return ValidationReport(
+            file_path=file_path,
+            validation_type=ValidationType.EXECUTION_CHECK,
+            result=ValidationResult.PASSED,
+            message="File exists",
+            details=[f"File found at: {full_path.absolute()}"]
+        )
+    else:
+        return ValidationReport(
+            file_path=file_path,
+            validation_type=ValidationType.EXECUTION_CHECK,
+            result=ValidationResult.FAILED,
+            message="File not found",
+            details=[f"File not found: {full_path.absolute()}"]
+        )
 
-def analyze_ast_issues(tree: ast.AST, file_path: str) -> List[str]:
-    """
-    Analyze AST for common structural issues.
+def get_validation_summary_text(summary: ValidationSummary) -> str:
+    """Generate a human-readable summary of validation results."""
+    lines = [
+        f"Validation Summary:",
+        f"  Total files: {summary.total_files}",
+        f"  Passed: {summary.passed_validations}",
+        f"  Failed: {summary.failed_validations}",
+        f"  Warnings: {summary.warnings}",
+        f"  Execution time: {summary.execution_time:.2f}s",
+        f"  Overall result: {'✓ PASSED' if summary.overall_success else '✗ FAILED'}",
+        ""
+    ]
     
-    Args:
-        tree: Parsed AST tree
-        file_path: Path to the file being analyzed
-        
-    Returns:
-        List of issue descriptions found in the code
-    """
-    issues = []
-    
-    # Check for unused variables (simple check)
-    assigned_vars = set()
-    used_vars = set()
-    
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Name):
-            if isinstance(node.ctx, ast.Store):
-                assigned_vars.add(node.id)
-            elif isinstance(node.ctx, ast.Load):
-                used_vars.add(node.id)
-    
-    # Find unused variables (excluding common patterns)
-    unused_vars = assigned_vars - used_vars
-    common_unused = {"_", "__name__", "__file__", "__doc__"}
-    unused_vars = unused_vars - common_unused
-    
-    if unused_vars:
-        issues.append(f"Potentially unused variables: {', '.join(sorted(unused_vars))}")
-    
-    # Check for empty functions/classes
-    for node in ast.walk(tree):
-        if isinstance(node, ast.FunctionDef) and len(node.body) == 1 and isinstance(node.body[0], ast.Pass):
-            issues.append(f"Empty function: {node.name}")
-        elif isinstance(node, ast.ClassDef) and len(node.body) == 1 and isinstance(node.body[0], ast.Pass):
-            issues.append(f"Empty class: {node.name}")
-    
-    return issues
-
-
-def file_passed_validation(file_path: str, validation_results: Dict[str, Any]) -> bool:
-    """
-    Check if a file passed all validation steps.
-    
-    Args:
-        file_path: Path to the file to check
-        validation_results: Complete validation results dictionary
-        
-    Returns:
-        True if the file passed all enabled validation steps
-    """
-    syntax_passed = file_path in validation_results.get("syntax_validation", {}).get("passed_files", [])
-    import_passed = file_path in validation_results.get("import_validation", {}).get("passed_files", [])
-    ast_passed = file_path in validation_results.get("ast_validation", {}).get("passed_files", [])
-    
-    # File passes if it passes syntax and doesn't fail other enabled checks
-    import_check_enabled = validation_results.get("import_validation", {}).get("success") is not None
-    ast_check_enabled = validation_results.get("ast_validation", {}).get("success") is not None
-    
-    return (syntax_passed and 
-            (not import_check_enabled or import_passed) and 
-            (not ast_check_enabled or ast_passed))
-
-
-def validate_code_comprehensive(
-    code_files: Dict[str, str],
-    python_path: Optional[str] = None,
-    validation_level: str = "standard",
-    check_imports: bool = True,
-    check_syntax_only: bool = False,
-    ignore_warnings: bool = False
-) -> Dict[str, Any]:
-    """
-    Main comprehensive code validation function.
-    
-    Args:
-        code_files: Dictionary mapping file paths to their content
-        python_path: Optional additional path to add to sys.path for import resolution
-        validation_level: Validation strictness level ('basic', 'standard', 'strict')
-        check_imports: Whether to perform import validation
-        check_syntax_only: Whether to only check syntax and skip other validations
-        ignore_warnings: Whether to ignore warning-level issues
-        
-    Returns:
-        Complete validation results dictionary with all validation steps
-    """
-    logger.info(f"Starting comprehensive code validation for {len(code_files)} files")
-    
-    validation_results = {
-        "syntax_validation": {"success": None, "details": []},
-        "import_validation": {"success": None, "details": []},
-        "ast_validation": {"success": None, "details": []},
-        "overall_success": False,
-        "files_processed": len(code_files),
-        "files_passed": 0,
-        "files_failed": 0,
-        "warnings": [],
-        "errors": []
-    }
-    
-    try:
-        # Step 1: Syntax validation (always performed)
-        syntax_result = validate_syntax(code_files)
-        validation_results["syntax_validation"] = syntax_result
-        
-        if not syntax_result["success"]:
-            validation_results["errors"].extend(syntax_result["errors"])
+    if summary.reports:
+        lines.append("Detailed Results:")
+        for report in summary.reports:
+            status = "✓" if report.result == ValidationResult.PASSED else "✗" if report.result == ValidationResult.FAILED else "⚠"
+            lines.append(f"  {status} {report.file_path}: {report.message}")
             
-            # Early return if syntax fails
-            validation_results["files_failed"] = len(code_files)
-            validation_results["overall_success"] = False
-            
-            return validation_results
+            if report.details:
+                for detail in report.details[:3]:  # Show first 3 details
+                    lines.append(f"    - {detail}")
+                if len(report.details) > 3:
+                    lines.append(f"    ... and {len(report.details) - 3} more")
         
-        # Step 2: Import validation (if requested and syntax is valid)
-        if check_imports and not check_syntax_only:
-            import_result = validate_imports(code_files, python_path)
-            validation_results["import_validation"] = import_result
-            
-            if not import_result["success"] and validation_level == "strict":
-                validation_results["errors"].extend(import_result["errors"])
-                
-                # Early return on strict mode import failure
-                validation_results["files_passed"] = len(syntax_result["passed_files"])
-                validation_results["files_failed"] = len(code_files) - validation_results["files_passed"]
-                validation_results["overall_success"] = False
-                
-                return validation_results
-            elif not import_result["success"]:
-                validation_results["warnings"].extend(import_result["errors"])
-        
-        # Step 3: AST validation (advanced structural validation)
-        if validation_level in ["standard", "strict"] and not check_syntax_only:
-            ast_result = validate_ast_structure(code_files)
-            validation_results["ast_validation"] = ast_result
-            
-            if not ast_result["success"] and validation_level == "strict":
-                validation_results["errors"].extend(ast_result["errors"])
-                
-                # Early return on strict mode AST failure
-                validation_results["files_passed"] = len([f for f in code_files if file_passed_validation(f, validation_results)])
-                validation_results["files_failed"] = len(code_files) - validation_results["files_passed"]
-                validation_results["overall_success"] = False
-                
-                return validation_results
-            elif not ast_result["success"]:
-                validation_results["warnings"].extend(ast_result["errors"])
-        
-        # Calculate final results
-        validation_results["files_passed"] = len([f for f in code_files if file_passed_validation(f, validation_results)])
-        validation_results["files_failed"] = len(code_files) - validation_results["files_passed"]
-        validation_results["overall_success"] = validation_results["files_failed"] == 0
-        
-        logger.info(f"Code validation complete: {validation_results['files_passed']}/{len(code_files)} files passed")
-        
-        return validation_results
-    
-    except Exception as e:
-        logger.error(f"Code validation failed with exception: {e}", exc_info=True)
-        validation_results["errors"].append(f"Validation exception: {e}")
-        validation_results["overall_success"] = False
-        return validation_results
+    return "\n".join(lines)
