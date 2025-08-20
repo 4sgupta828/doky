@@ -32,37 +32,6 @@ class RequirementsManagerAgent(BaseAgent):
     def optional_inputs(self) -> List[str]:
         return ["output_directory", "requirements_file_path"]
     
-    def execute(self, goal: str, context: GlobalContext, current_task: TaskNode) -> AgentResponse:
-        """Legacy execute method - tries to infer inputs from context."""
-        # Try to get code files from artifacts or workspace
-        code_files = {}
-        
-        # Check for recent artifacts that might contain code
-        for artifact_key in context.list_artifacts():
-            if artifact_key.endswith('.py') or 'code' in artifact_key.lower():
-                content = context.get_artifact(artifact_key)
-                if content and isinstance(content, str):
-                    code_files[artifact_key] = content
-        
-        if not code_files:
-            return AgentResponse(
-                success=False, 
-                message="No Python code files found in context to analyze for dependencies"
-            )
-        
-        inputs = {
-            'code_files': code_files,
-            'output_directory': context.workspace_path
-        }
-        
-        result = self.execute_v2(goal, inputs, context)
-        
-        return AgentResponse(
-            success=result.success,
-            message=result.message,
-            artifacts_generated=[result.outputs.get('requirements_file')] if result.outputs.get('requirements_file') else []
-        )
-    
     def execute_v2(self, goal: str, inputs: Dict[str, Any], global_context: GlobalContext) -> AgentResult:
         """Analyze code and manage requirements.txt"""
         self.validate_inputs(inputs)
