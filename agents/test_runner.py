@@ -1,20 +1,29 @@
 # agents/test_runner.py
-import json
 import logging
 from typing import Dict, Any, List
 
 # Foundational dependencies
 from .base import BaseAgent
 from core.context import GlobalContext
-from core.models import AgentResult, TaskNode
+from core.models import AgentResult, TaskNode, AgentResponse
+from tools.test_tools import TestTools
 
 # Get a logger instance for this module
 logger = logging.getLogger(__name__)
 
 class TestRunnerAgent(BaseAgent):
     """
-    Orchestrates the execution of test suites. It discovers test files, verifies
-    the environment, and delegates command execution to the ToolingAgent.
+    Comprehensive test execution agent that combines orchestration and execution capabilities.
+    
+    This agent handles test framework detection, discovery, execution, and analysis.
+    It maintains the agent orchestration pattern while providing comprehensive test functionality.
+    
+    Responsibilities:
+    - Multi-framework test support (pytest, unittest, custom)
+    - Test discovery with advanced patterns and filtering
+    - Test execution with coverage, timeout, and output options
+    - Result parsing and comprehensive reporting
+    - Environment validation and pre-flight checks
     """
 
     def __init__(self, agent_registry: Dict[str, Any] = None):
@@ -25,141 +34,177 @@ class TestRunnerAgent(BaseAgent):
         self.agent_registry = agent_registry or {}
 
     def required_inputs(self) -> List[str]:
-        """The TestRunnerAgent can run without specific inputs by discovering tests."""
-        return []
+        """Required inputs for TestRunnerAgent execution."""
+        return []  # Can auto-discover tests
 
     def optional_inputs(self) -> List[str]:
-        return ["specific_test_files"]
+        """Optional inputs for comprehensive test configuration."""
+        return [
+            "test_target",  # files, directories, or patterns
+            "test_framework",  # pytest, unittest, custom, auto
+            "python_executable", 
+            "working_directory",
+            "timeout_seconds",
+            "test_patterns",
+            "exclude_patterns",
+            "output_format",  # json, xml, text
+            "coverage_enabled",
+            "additional_args",
+            "specific_test_files"  # legacy support
+        ]
 
     def execute_v2(self, goal: str, inputs: Dict[str, Any], global_context: GlobalContext) -> AgentResult:
         """
-        Discovers, runs, and analyzes tests, including a pre-flight environment check.
+        Comprehensive test execution with framework detection, discovery, execution, and analysis.
         """
-        self.validate_inputs(inputs)
+        logger.info(f"TestRunnerAgent executing: '{goal}'")
         
-        file_system_agent = self.agent_registry.get("FileSystemAgent")
-        tooling_agent = self.agent_registry.get("ToolingAgent")
-
-        if not file_system_agent or not tooling_agent:
-            return self.create_result(success=False, message="Required agents (FileSystemAgent, ToolingAgent) not available.")
-
-        self.report_progress("Starting test execution", f"Goal: {goal}")
-
-        # --- NEW: Step 0: Pre-flight Environment Check ---
-        self.report_thinking("Performing pre-flight check to ensure test environment is ready.")
-        env_check_result = self._check_environment(tooling_agent, global_context)
-        if not env_check_result.success:
+        # Validate inputs with graceful handling
+        try:
+            self.validate_inputs(inputs)
+        except Exception as validation_error:
             return self.create_result(
                 success=False,
-                message=f"Environment pre-flight check failed: {env_check_result.message}",
-                outputs={"error_type": "ENVIRONMENT_FAILURE"}
+                message=str(validation_error),
+                error_details={"validation_error": str(validation_error)}
             )
-        self.report_progress("Environment check passed", "Pytest is available.")
 
-        # --- Step 1: Discover Test Files ---
-        specific_files = inputs.get("specific_test_files")
-        if specific_files:
-            test_files = specific_files
-            self.report_thinking(f"Running specific tests for {len(test_files)} provided files.")
-        else:
-            self.report_thinking("No specific test files provided. Discovering tests in the workspace.")
-            discovery_result = self.call_agent_v2(
-                target_agent=file_system_agent,
-                goal="Discover all Python test files in the workspace.",
-                inputs={
-                    "operation": "discover",
-                    "patterns": ["test_*.py", "*_test.py"],
-                    "recursive": True
-                },
-                global_context=global_context
-            )
-            if not discovery_result.success:
-                return self.create_result(success=False, message=f"Failed to discover test files: {discovery_result.message}")
-            
-            test_files = discovery_result.outputs.get("discovered_files", [])
+        # Extract and set defaults for inputs
+        test_target = inputs.get("test_target") or inputs.get("specific_test_files")
+        test_framework = inputs.get("test_framework", "auto")
+        python_executable = inputs.get("python_executable")
+        working_directory = inputs.get("working_directory", str(global_context.workspace_path))
+        timeout_seconds = inputs.get("timeout_seconds", 300)
+        test_patterns = inputs.get("test_patterns", [])
+        exclude_patterns = inputs.get("exclude_patterns", [])
+        output_format = inputs.get("output_format", "json")
+        coverage_enabled = inputs.get("coverage_enabled", False)
+        additional_args = inputs.get("additional_args", [])
 
-        if not test_files:
-            return self.create_result(success=True, message="No test files found to run.")
-        
-        self.report_progress(f"Discovered {len(test_files)} test files.", f"Examples: {test_files[:3]}")
-
-        # --- Step 2: Execute Tests via ToolingAgent ---
-        report_file = "test_report.json"
-        test_command = f"python -m pytest {' '.join(test_files)} --json-report --json-report-file={report_file}"
-        
-        tooling_result = self.call_agent_v2(
-            target_agent=tooling_agent,
-            goal="Execute the test suite and generate a JSON report.",
-            inputs={
-                "commands": [test_command],
-                "purpose": "Test Suite Execution",
-                "ignore_errors": True # Capture the report even if tests fail (exit code 1)
-            },
-            global_context=global_context
-        )
-
-        if not tooling_result.success and tooling_result.outputs.get("exit_code", 0) not in [0, 1]:
-            return self.create_result(success=False, message=f"Test execution command failed: {tooling_result.message}")
-
-        # --- Step 3: Analyze the Test Report ---
-        return self._analyze_test_report(report_file, global_context)
-
-    def _check_environment(self, tooling_agent: BaseAgent, context: GlobalContext) -> AgentResult:
-        """Performs a pre-flight check for necessary testing tools like pytest."""
-        return self.call_agent_v2(
-            target_agent=tooling_agent,
-            goal="Check if pytest is installed.",
-            inputs={
-                "commands": ["python -m pytest --version"],
-                "purpose": "Environment Pre-flight Check"
-            },
-            global_context=context
-        )
-
-    def _analyze_test_report(self, report_file: str, context: GlobalContext) -> AgentResult:
-        """Analyzes the test_report.json file produced by pytest."""
-        self.report_progress("Analyzing test report...")
-        
-        file_system_agent = self.agent_registry.get("FileSystemAgent")
-        if not file_system_agent:
-            return self.create_result(success=False, message="FileSystemAgent not available to read test report.")
-
-        read_result = self.call_agent_v2(
-            target_agent=file_system_agent,
-            goal=f"Read the content of the test report file: {report_file}",
-            inputs={"operation": "read", "target_path": report_file},
-            global_context=context
-        )
-
-        if not read_result.success:
-            return self.create_result(success=False, message=f"Could not read test report file '{report_file}'.")
-        
-        report_content = read_result.outputs.get("content")
-        
         try:
-            report_data = json.loads(report_content)
-            summary = report_data.get("summary", {})
-            failed_count = summary.get("failed", 0)
-            passed_count = summary.get("passed", 0)
-            total_count = summary.get("total", 0)
+            self.report_progress("Starting comprehensive test execution", f"Target: {test_target or 'auto-discover'}")
 
-            if failed_count > 0:
-                msg = f"Test suite failed: {failed_count} of {total_count} tests failed."
-                logger.error(msg)
+            # Step 1: Detect test framework
+            self.report_progress("Detecting test framework", f"Requested: {test_framework}")
+            framework_result = TestTools.detect_test_framework(
+                requested_framework=test_framework, 
+                test_target=test_target, 
+                working_directory=working_directory
+            )
+            
+            if not framework_result["success"]:
                 return self.create_result(
                     success=False,
-                    message=msg,
-                    outputs={"failed_test_report": report_data}
-                )
-            else:
-                msg = f"Test suite passed: All {passed_count} of {total_count} tests were successful."
-                logger.info(msg)
-                return self.create_result(
-                    success=True,
-                    message=msg,
-                    outputs={"test_summary": summary}
+                    message=f"Test framework detection failed: {framework_result['message']}",
+                    error_details=framework_result
                 )
 
-        except (json.JSONDecodeError, KeyError) as e:
-            msg = f"Failed to parse test report. Error: {e}"
-            return self.create_result(success=False, message=msg)
+            detected_framework = framework_result["framework"]
+            self.report_progress("Framework detected", f"Using {detected_framework}")
+
+            # Step 2: Discover test files
+            self.report_progress("Discovering test files", "Searching for test files...")
+            discovery_result = TestTools.discover_test_files(
+                test_target=test_target or ".",
+                framework=detected_framework,
+                working_directory=working_directory,
+                test_patterns=test_patterns,
+                exclude_patterns=exclude_patterns
+            )
+            
+            if not discovery_result["success"]:
+                return self.create_result(
+                    success=False,
+                    message=f"Test discovery failed: {discovery_result['message']}",
+                    error_details=discovery_result
+                )
+
+            test_files = discovery_result["test_files"]
+            if not test_files:
+                return self.create_result(
+                    success=True, 
+                    message="No test files found to run.",
+                    outputs={"test_files_discovered": 0}
+                )
+            
+            self.report_progress("Test discovery complete", f"Found {len(test_files)} test files")
+
+            # Step 3: Execute tests using TestTools
+            self.report_progress("Executing tests", f"Running {len(test_files)} test files with {detected_framework}")
+            execution_result = TestTools.execute_tests(
+                test_files=test_files,
+                framework=detected_framework,
+                python_executable=python_executable,
+                working_directory=working_directory,
+                timeout_seconds=timeout_seconds,
+                coverage_enabled=coverage_enabled,
+                additional_args=additional_args,
+                output_format=output_format
+            )
+
+            # Step 4: Parse and analyze results
+            analysis_result = TestTools.parse_test_results(execution_result, detected_framework)
+
+            # Combine results
+            final_result = {
+                "test_framework": detected_framework,
+                "test_files_discovered": len(test_files),
+                "test_files_executed": len(execution_result.get("executed_files", [])),
+                "execution_details": execution_result,
+                "analysis": analysis_result,
+                "success": execution_result.get("success", False) and analysis_result.get("success", False)
+            }
+
+            message = self._create_summary_message(final_result, analysis_result)
+            self.report_progress("Test execution complete", message)
+
+            return self.create_result(
+                success=final_result["success"],
+                message=message,
+                outputs=final_result
+            )
+
+        except Exception as e:
+            error_msg = f"TestRunnerAgent execution failed: {e}"
+            logger.error(error_msg, exc_info=True)
+            return self.create_result(
+                success=False,
+                message=error_msg,
+                error_details={"exception": str(e)}
+            )
+
+    def _create_summary_message(self, final_result: Dict[str, Any], analysis_result: Dict[str, Any]) -> str:
+        """Create a summary message for the test execution."""
+        framework = final_result.get("test_framework", "unknown")
+        files_count = final_result.get("test_files_discovered", 0)
+        
+        if final_result["success"]:
+            if analysis_result.get("passed_tests"):
+                passed = analysis_result.get("passed_tests", 0)
+                total = analysis_result.get("total_tests", 0)
+                return f"Test suite passed: {passed}/{total} tests successful using {framework} ({files_count} files)"
+            else:
+                return f"Test execution successful using {framework}: {analysis_result.get('summary', 'Tests passed')}"
+        else:
+            if analysis_result.get("failed_tests"):
+                failed = analysis_result.get("failed_tests", 0)
+                total = analysis_result.get("total_tests", 0)
+                return f"Test suite failed: {failed}/{total} tests failed using {framework} ({files_count} files)"
+            else:
+                return f"Test execution failed using {framework}: {analysis_result.get('summary', 'Tests failed')}"
+
+    # Legacy execute method for backward compatibility
+    def execute(self, goal: str, context: GlobalContext, _current_task: TaskNode) -> AgentResponse:
+        """Legacy execute method for backward compatibility."""
+        inputs = {
+            "test_target": str(context.workspace_path),
+            "working_directory": str(context.workspace_path)
+        }
+        
+        result = self.execute_v2(goal, inputs, context)
+        
+        return AgentResponse(
+            success=result.success,
+            message=result.message,
+            artifacts_generated=[]
+        )

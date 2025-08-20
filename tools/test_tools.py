@@ -1,161 +1,33 @@
-# agents/test_analysis.py
+# tools/test_tools.py
+import json
 import logging
+import os
 import subprocess
 import sys
-import os
-import json
 import time
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 
-# Foundational dependencies
-from .base import BaseAgent
 from core.context import GlobalContext
-from core.models import AgentResponse, AgentResult, TaskNode
 
 # Get a logger instance for this module
 logger = logging.getLogger(__name__)
 
 
-class TestAnalysisAgent(BaseAgent):
+class TestTools:
     """
-    Analysis Tier: Read-only test result analysis.
+    Atomic test operations following the principle of structured tools.
     
-    This agent provides read-only analysis of test results.
-    
-    Responsibilities:
-    - Test result parsing and reporting
-    - Test failure analysis
-    - Test coverage analysis
-    - Timeout and process management
-    - Test discovery and filtering
+    This module provides low-level test operations that can be used
+    by agents or other components for test discovery, execution, and analysis.
     """
 
-    def __init__(self):
-        super().__init__(
-            name="TestAnalysisAgent",
-            description="Analyzes test results and provides comprehensive testing insights."
-        )
-
-    def required_inputs(self) -> List[str]:
-        """Required inputs for TestExecutorAgent execution."""
-        return ["test_target"]  # Can be files, directories, or test commands
-
-    def optional_inputs(self) -> List[str]:
-        """Optional inputs for TestExecutorAgent execution."""
-        return [
-            "test_framework",  # pytest, unittest, custom
-            "python_executable", 
-            "working_directory",
-            "timeout_seconds",
-            "test_patterns",
-            "exclude_patterns",
-            "output_format",  # json, xml, text
-            "coverage_enabled",
-            "additional_args"
-        ]
-
-    def execute_v2(self, goal: str, inputs: Dict[str, Any], global_context: GlobalContext) -> AgentResult:
-        """
-        NEW INTERFACE: Execute tests with comprehensive configuration options.
-        """
-        logger.info(f"TestExecutorAgent executing: '{goal}'")
-        
-        # Validate inputs with graceful handling
-        try:
-            self.validate_inputs(inputs)
-        except Exception as validation_error:
-            return self.create_result(
-                success=False,
-                message=str(validation_error),
-                error_details={"validation_error": str(validation_error)}
-            )
-
-        # Extract inputs
-        test_target = inputs["test_target"]
-        test_framework = inputs.get("test_framework", "auto")  # auto-detect
-        python_executable = inputs.get("python_executable", sys.executable)
-        working_directory = inputs.get("working_directory", str(global_context.workspace_path))
-        timeout_seconds = inputs.get("timeout_seconds", 300)  # 5 minutes default
-        test_patterns = inputs.get("test_patterns", [])
-        exclude_patterns = inputs.get("exclude_patterns", [])
-        output_format = inputs.get("output_format", "json")
-        coverage_enabled = inputs.get("coverage_enabled", False)
-        additional_args = inputs.get("additional_args", [])
-
-        try:
-            self.report_progress("Starting test execution", f"Target: {test_target}")
-
-            # Step 1: Detect or validate test framework
-            framework_result = self._detect_test_framework(test_framework, test_target, working_directory)
-            if not framework_result["success"]:
-                return self.create_result(
-                    success=False,
-                    message=f"Test framework detection failed: {framework_result['message']}",
-                    error_details=framework_result
-                )
-
-            detected_framework = framework_result["framework"]
-            self.report_progress("Test framework detected", f"Using {detected_framework}")
-
-            # Step 2: Discover and filter tests
-            discovery_result = self._discover_tests(
-                test_target, detected_framework, working_directory, 
-                test_patterns, exclude_patterns
-            )
-            
-            if not discovery_result["success"]:
-                return self.create_result(
-                    success=False,
-                    message=f"Test discovery failed: {discovery_result['message']}",
-                    error_details=discovery_result
-                )
-
-            test_files = discovery_result["test_files"]
-            self.report_progress("Test discovery complete", f"Found {len(test_files)} test files")
-
-            # Step 3: Execute tests
-            execution_result = self._execute_tests(
-                test_files, detected_framework, python_executable, 
-                working_directory, timeout_seconds, coverage_enabled, 
-                additional_args, output_format
-            )
-
-            # Step 4: Parse and analyze results
-            analysis_result = self._analyze_test_results(execution_result, detected_framework)
-
-            # Combine results
-            final_result = {
-                "test_framework": detected_framework,
-                "test_files_discovered": len(test_files),
-                "test_files_executed": len(execution_result.get("executed_files", [])),
-                "execution_details": execution_result,
-                "analysis": analysis_result,
-                "success": execution_result.get("success", False) and analysis_result.get("success", False)
-            }
-
-            message = self._create_summary_message(final_result, analysis_result)
-
-            self.report_progress("Test execution complete", message)
-
-            return self.create_result(
-                success=final_result["success"],
-                message=message,
-                outputs=final_result
-            )
-
-        except Exception as e:
-            error_msg = f"TestExecutorAgent execution failed: {e}"
-            logger.error(error_msg, exc_info=True)
-            return self.create_result(
-                success=False,
-                message=error_msg,
-                error_details={"exception": str(e)}
-            )
-
-    def _detect_test_framework(self, requested_framework: str, test_target: str, 
-                             working_directory: str) -> Dict[str, Any]:
+    @staticmethod
+    def detect_test_framework(requested_framework: str = "auto", test_target: str = None, 
+                             working_directory: str = None) -> Dict[str, Any]:
         """Detect or validate the test framework to use."""
+        working_directory = working_directory or os.getcwd()
+        
         if requested_framework != "auto":
             # Validate requested framework is available
             if requested_framework == "pytest":
@@ -168,7 +40,7 @@ class TestAnalysisAgent(BaseAgent):
                         return {"success": True, "framework": "pytest"}
                     else:
                         return {"success": False, "message": "pytest not available"}
-                except:
+                except Exception:
                     return {"success": False, "message": "pytest validation failed"}
                     
             elif requested_framework == "unittest":
@@ -190,11 +62,11 @@ class TestAnalysisAgent(BaseAgent):
                 )
                 if result.returncode == 0:
                     return {"success": True, "framework": "pytest"}
-            except:
+            except Exception:
                 pass
 
         # Check for unittest indicators
-        if isinstance(test_target, str) and "test_" in test_target:
+        if test_target and "test_" in str(test_target):
             return {"success": True, "framework": "unittest"}
 
         # Default to pytest if available, otherwise unittest
@@ -205,19 +77,21 @@ class TestAnalysisAgent(BaseAgent):
             )
             if result.returncode == 0:
                 return {"success": True, "framework": "pytest"}
-        except:
+        except Exception:
             pass
 
         return {"success": True, "framework": "unittest"}
 
-    def _discover_tests(self, test_target: str, framework: str, working_directory: str,
-                       test_patterns: List[str], exclude_patterns: List[str]) -> Dict[str, Any]:
+    @staticmethod
+    def discover_test_files(test_target: str, framework: str = "auto", working_directory: str = None,
+                           test_patterns: List[str] = None, exclude_patterns: List[str] = None) -> Dict[str, Any]:
         """Discover test files based on target and patterns."""
+        working_directory = working_directory or os.getcwd()
         working_path = Path(working_directory)
         test_files = []
 
         try:
-            if isinstance(test_target, str):
+            if test_target:
                 target_path = Path(test_target)
                 
                 if target_path.is_absolute():
@@ -230,7 +104,7 @@ class TestAnalysisAgent(BaseAgent):
                     test_files.append(str(search_path))
                 elif search_path.is_dir():
                     # Directory - discover test files
-                    if framework == "pytest":
+                    if framework == "pytest" or framework == "auto":
                         # Pytest discovery patterns
                         patterns = test_patterns or ["test_*.py", "*_test.py"]
                     else:
@@ -242,14 +116,21 @@ class TestAnalysisAgent(BaseAgent):
                         test_files.extend([str(f) for f in discovered])
                 else:
                     # Pattern or command
-                    if framework == "pytest":
-                        patterns = [test_target]
-                    else:
-                        patterns = test_patterns or ["test*.py"]
+                    patterns = [test_target] if framework == "pytest" else (test_patterns or ["test*.py"])
                     
                     for pattern in patterns:
                         discovered = list(working_path.rglob(pattern))
                         test_files.extend([str(f) for f in discovered])
+            else:
+                # Default patterns for workspace discovery
+                if framework == "pytest" or framework == "auto":
+                    patterns = test_patterns or ["test_*.py", "*_test.py"]
+                else:
+                    patterns = test_patterns or ["test*.py"]
+                
+                for pattern in patterns:
+                    discovered = list(working_path.rglob(pattern))
+                    test_files.extend([str(f) for f in discovered])
 
             # Filter out excluded patterns
             if exclude_patterns:
@@ -277,25 +158,30 @@ class TestAnalysisAgent(BaseAgent):
                 "test_files": []
             }
 
-    def _execute_tests(self, test_files: List[str], framework: str, python_executable: str,
-                      working_directory: str, timeout_seconds: int, coverage_enabled: bool,
-                      additional_args: List[str], output_format: str) -> Dict[str, Any]:
+    @staticmethod
+    def execute_tests(test_files: List[str], framework: str = "pytest", python_executable: str = None,
+                     working_directory: str = None, timeout_seconds: int = 300, 
+                     coverage_enabled: bool = False, additional_args: List[str] = None, 
+                     output_format: str = "json") -> Dict[str, Any]:
         """Execute tests using the specified framework."""
+        python_executable = python_executable or sys.executable
+        working_directory = working_directory or os.getcwd()
+        additional_args = additional_args or []
         start_time = time.time()
         
         try:
             if framework == "pytest":
-                return self._execute_pytest(
+                return TestTools._execute_pytest(
                     test_files, python_executable, working_directory, 
                     timeout_seconds, coverage_enabled, additional_args, output_format
                 )
             elif framework == "unittest":
-                return self._execute_unittest(
+                return TestTools._execute_unittest(
                     test_files, python_executable, working_directory, 
                     timeout_seconds, additional_args
                 )
             elif framework == "custom":
-                return self._execute_custom_tests(
+                return TestTools._execute_custom_tests(
                     test_files, python_executable, working_directory, 
                     timeout_seconds, additional_args
                 )
@@ -314,7 +200,35 @@ class TestAnalysisAgent(BaseAgent):
                 "exception": str(e)
             }
 
-    def _execute_pytest(self, test_files: List[str], python_executable: str, 
+    @staticmethod
+    def parse_test_results(execution_result: Dict[str, Any], framework: str) -> Dict[str, Any]:
+        """Parse and analyze test execution results."""
+        if not execution_result.get("success", False):
+            return {
+                "success": False,
+                "total_tests": 0,
+                "passed_tests": 0,
+                "failed_tests": 0,
+                "summary": "Test execution failed",
+                "details": execution_result.get("message", "Unknown error")
+            }
+
+        # Parse results based on framework
+        if framework == "pytest":
+            return TestTools._parse_pytest_results(execution_result)
+        elif framework == "unittest":
+            return TestTools._parse_unittest_results(execution_result)
+        elif framework == "custom":
+            return TestTools._parse_custom_results(execution_result)
+        else:
+            return {
+                "success": False,
+                "summary": f"Unknown framework: {framework}",
+                "details": execution_result
+            }
+
+    @staticmethod
+    def _execute_pytest(test_files: List[str], python_executable: str, 
                        working_directory: str, timeout_seconds: int, coverage_enabled: bool,
                        additional_args: List[str], output_format: str) -> Dict[str, Any]:
         """Execute tests using pytest."""
@@ -325,21 +239,19 @@ class TestAnalysisAgent(BaseAgent):
         
         # Add output format
         if output_format == "json":
-            cmd.extend(["--json-report", "--json-report-file=/tmp/pytest_report.json"])
+            cmd.extend(["--json-report", "--json-report-file=test_report.json"])
         elif output_format == "xml":
-            cmd.extend(["--junit-xml=/tmp/pytest_report.xml"])
+            cmd.extend(["--junit-xml=test_report.xml"])
         
         # Add coverage if enabled
         if coverage_enabled:
-            cmd.extend(["--cov=.", "--cov-report=term", "--cov-report=json:/tmp/coverage.json"])
+            cmd.extend(["--cov=.", "--cov-report=term", "--cov-report=json:coverage.json"])
         
         # Add additional arguments
         cmd.extend(additional_args)
         
         # Add test files
         cmd.extend(test_files)
-        
-        self.report_progress("Executing pytest", f"Command: {' '.join(cmd[-10:])}")
         
         try:
             result = subprocess.run(
@@ -352,18 +264,15 @@ class TestAnalysisAgent(BaseAgent):
             
             duration = time.time() - start_time
             
-            # Parse pytest output
-            test_results = self._parse_pytest_output(result, output_format)
-            
             return {
-                "success": result.returncode == 0,
+                "success": result.returncode in [0, 1],  # 0=pass, 1=fail but valid
                 "command": cmd,
                 "return_code": result.returncode,
                 "stdout": result.stdout,
                 "stderr": result.stderr,
                 "duration": duration,
                 "executed_files": test_files,
-                "parsed_results": test_results
+                "framework": "pytest"
             }
             
         except subprocess.TimeoutExpired:
@@ -371,10 +280,12 @@ class TestAnalysisAgent(BaseAgent):
                 "success": False,
                 "message": f"Test execution timed out after {timeout_seconds} seconds",
                 "duration": time.time() - start_time,
-                "executed_files": test_files
+                "executed_files": test_files,
+                "framework": "pytest"
             }
 
-    def _execute_unittest(self, test_files: List[str], python_executable: str, 
+    @staticmethod
+    def _execute_unittest(test_files: List[str], python_executable: str, 
                          working_directory: str, timeout_seconds: int, 
                          additional_args: List[str]) -> Dict[str, Any]:
         """Execute tests using unittest."""
@@ -393,8 +304,6 @@ class TestAnalysisAgent(BaseAgent):
         
         cmd.extend(test_modules)
         
-        self.report_progress("Executing unittest", f"Command: {' '.join(cmd[-5:])}")
-        
         try:
             result = subprocess.run(
                 cmd,
@@ -406,9 +315,6 @@ class TestAnalysisAgent(BaseAgent):
             
             duration = time.time() - start_time
             
-            # Parse unittest output
-            test_results = self._parse_unittest_output(result)
-            
             return {
                 "success": result.returncode == 0,
                 "command": cmd,
@@ -417,7 +323,7 @@ class TestAnalysisAgent(BaseAgent):
                 "stderr": result.stderr,
                 "duration": duration,
                 "executed_files": test_files,
-                "parsed_results": test_results
+                "framework": "unittest"
             }
             
         except subprocess.TimeoutExpired:
@@ -425,10 +331,12 @@ class TestAnalysisAgent(BaseAgent):
                 "success": False,
                 "message": f"Test execution timed out after {timeout_seconds} seconds",
                 "duration": time.time() - start_time,
-                "executed_files": test_files
+                "executed_files": test_files,
+                "framework": "unittest"
             }
 
-    def _execute_custom_tests(self, test_files: List[str], python_executable: str, 
+    @staticmethod
+    def _execute_custom_tests(test_files: List[str], python_executable: str, 
                              working_directory: str, timeout_seconds: int, 
                              additional_args: List[str]) -> Dict[str, Any]:
         """Execute custom test scripts."""
@@ -469,76 +377,69 @@ class TestAnalysisAgent(BaseAgent):
             "success": overall_success,
             "duration": time.time() - start_time,
             "executed_files": test_files,
-            "file_results": results
+            "file_results": results,
+            "framework": "custom"
         }
 
-    def _parse_pytest_output(self, result: subprocess.CompletedProcess, output_format: str) -> Dict[str, Any]:
-        """Parse pytest output to extract test results."""
-        # Simple parsing - in production this would be more sophisticated
-        stdout = result.stdout
+    @staticmethod
+    def _parse_pytest_results(execution_result: Dict[str, Any]) -> Dict[str, Any]:
+        """Parse pytest execution results."""
+        stdout = execution_result.get("stdout", "")
+        return_code = execution_result.get("return_code", 1)
         
+        # Try to read JSON report if it exists
+        try:
+            if Path("test_report.json").exists():
+                with open("test_report.json", "r") as f:
+                    report_data = json.load(f)
+                summary = report_data.get("summary", {})
+                return {
+                    "success": return_code == 0,
+                    "framework": "pytest",
+                    "total_tests": summary.get("total", 0),
+                    "passed_tests": summary.get("passed", 0),
+                    "failed_tests": summary.get("failed", 0),
+                    "execution_time": execution_result.get("duration", 0),
+                    "summary": f"Tests {'passed' if return_code == 0 else 'failed'}",
+                    "detailed_report": report_data
+                }
+        except Exception:
+            pass
+        
+        # Fallback to stdout parsing
         if "failed" in stdout.lower():
-            return {"status": "failed", "details": stdout}
+            return {"success": False, "status": "failed", "details": stdout, "framework": "pytest"}
         elif "passed" in stdout.lower():
-            return {"status": "passed", "details": stdout}
+            return {"success": True, "status": "passed", "details": stdout, "framework": "pytest"}
         else:
-            return {"status": "unknown", "details": stdout}
+            return {"success": return_code == 0, "status": "unknown", "details": stdout, "framework": "pytest"}
 
-    def _parse_unittest_output(self, result: subprocess.CompletedProcess) -> Dict[str, Any]:
-        """Parse unittest output to extract test results."""
-        stdout = result.stdout + result.stderr
+    @staticmethod
+    def _parse_unittest_results(execution_result: Dict[str, Any]) -> Dict[str, Any]:
+        """Parse unittest execution results."""
+        stdout = execution_result.get("stdout", "") + execution_result.get("stderr", "")
+        return_code = execution_result.get("return_code", 1)
         
         if "FAILED" in stdout:
-            return {"status": "failed", "details": stdout}
+            return {"success": False, "status": "failed", "details": stdout, "framework": "unittest"}
         elif "OK" in stdout:
-            return {"status": "passed", "details": stdout}
+            return {"success": True, "status": "passed", "details": stdout, "framework": "unittest"}
         else:
-            return {"status": "unknown", "details": stdout}
+            return {"success": return_code == 0, "status": "unknown", "details": stdout, "framework": "unittest"}
 
-    def _analyze_test_results(self, execution_result: Dict[str, Any], framework: str) -> Dict[str, Any]:
-        """Analyze test execution results."""
-        if not execution_result.get("success", False):
-            return {
-                "success": False,
-                "total_tests": 0,
-                "passed_tests": 0,
-                "failed_tests": 0,
-                "summary": "Test execution failed",
-                "details": execution_result.get("message", "Unknown error")
-            }
-
-        # Simple analysis - in production this would be more detailed
-        parsed = execution_result.get("parsed_results", {})
-        status = parsed.get("status", "unknown")
+    @staticmethod
+    def _parse_custom_results(execution_result: Dict[str, Any]) -> Dict[str, Any]:
+        """Parse custom test execution results."""
+        file_results = execution_result.get("file_results", [])
+        total_files = len(file_results)
+        successful_files = sum(1 for r in file_results if r.get("success", False))
         
         return {
-            "success": status == "passed",
-            "framework": framework,
-            "status": status,
+            "success": execution_result.get("success", False),
+            "framework": "custom",
+            "total_files": total_files,
+            "successful_files": successful_files,
+            "failed_files": total_files - successful_files,
             "execution_time": execution_result.get("duration", 0),
-            "summary": f"Tests {status}",
-            "details": parsed.get("details", "")
+            "file_details": file_results
         }
-
-    def _create_summary_message(self, final_result: Dict[str, Any], analysis_result: Dict[str, Any]) -> str:
-        """Create a summary message for the test execution."""
-        if final_result["success"]:
-            return f"Test execution successful: {analysis_result.get('summary', 'Tests passed')}"
-        else:
-            return f"Test execution failed: {analysis_result.get('summary', 'Tests failed')}"
-
-    # Legacy execute method for backward compatibility
-    def execute(self, goal: str, context: GlobalContext, current_task: TaskNode) -> AgentResponse:
-        """Legacy execute method for backward compatibility."""
-        inputs = {
-            "test_target": context.workspace_path,
-            "working_directory": str(context.workspace_path)
-        }
-        
-        result = self.execute_v2(goal, inputs, context)
-        
-        return AgentResponse(
-            success=result.success,
-            message=result.message,
-            artifacts_generated=[]
-        )

@@ -31,7 +31,6 @@ from .workflow_adapter import WorkflowAdapterAgent
 # New Agent Architecture - Aligned with 21-Agent Plan
 # Analysis Tier (Read-only)
 from .code_analysis import CodeAnalysisAgent
-from .test_analysis import TestAnalysisAgent
 from .environment_analysis import EnvironmentAnalysisAgent
 from .problem_analysis import ProblemAnalysisAgent
 
@@ -65,7 +64,6 @@ AGENT_REGISTRY: Dict[str, Type[BaseAgent]] = {
 
     # Analysis Tier - Read-only analysis agents
     "CodeAnalysisAgent": CodeAnalysisAgent,
-    "TestAnalysisAgent": TestAnalysisAgent,
     "EnvironmentAnalysisAgent": EnvironmentAnalysisAgent,
     "ProblemAnalysisAgent": ProblemAnalysisAgent,
     
@@ -119,7 +117,6 @@ AGENT_ALIASES: Dict[str, str] = {
     "@workflow": "WorkflowAdapterAgent",
     # Analysis Tier
     "@code-analysis": "CodeAnalysisAgent",
-    "@test-analysis": "TestAnalysisAgent", 
     "@env-analysis": "EnvironmentAnalysisAgent",
     "@problem-analysis": "ProblemAnalysisAgent",
     # Specialized Tier
@@ -217,7 +214,7 @@ if __name__ == "__main__":
         def test_registry_population(self):
             """Tests if the registry contains all the expected agents."""
             print("\n--- [Test Case 1: Registry Population] ---")
-            self.assertEqual(len(AGENT_REGISTRY), 30)  # Updated for 2 intelligence + 10 tier + 3 coordination agents
+            self.assertEqual(len(AGENT_REGISTRY), 29)  # Updated count after removing TestAnalysisAgent
             self.assertIn("PlannerAgent", AGENT_REGISTRY)
             self.assertIn("CoderAgent", AGENT_REGISTRY)
             self.assertIn("TestRunnerAgent", AGENT_REGISTRY)
@@ -226,7 +223,6 @@ if __name__ == "__main__":
             self.assertIn("WorkflowAdapterAgent", AGENT_REGISTRY)
             # Check new tier agents
             self.assertIn("CodeAnalysisAgent", AGENT_REGISTRY)
-            self.assertIn("TestAnalysisAgent", AGENT_REGISTRY)
             self.assertIn("EnvironmentAnalysisAgent", AGENT_REGISTRY)
             self.assertIn("ProblemAnalysisAgent", AGENT_REGISTRY)
             self.assertIn("CodeModifierAgent", AGENT_REGISTRY)
