@@ -216,26 +216,35 @@ class DebuggingAgent(BaseAgent):
         last_reflection = state.reflection_history[-1] if state.reflection_history else None
         
         return f"""
-        You are an expert debugging agent. Your goal is to solve the following problem by generating a new hypothesis.
-        Avoid repeating past mistakes by carefully considering the debugging history and the reflection on the last failed attempt.
+        **Persona**: You are an expert staff engineer and researcher, specializing in root cause analysis of complex software failures.
 
-        **OVERALL PROBLEM TO SOLVE**: {state.problem_description}
+        **Overall Goal**: Your primary objective is to analyze the provided context and evidence to form a new, actionable hypothesis that will lead to a successful bug fix.
 
-        **DEBUGGING HISTORY:**
-        - Hypotheses Already Tested: {json.dumps(state.hypotheses_tested)}
-        - Fixes Attempted: {json.dumps(state.fixes_attempted)}
-        - Last Known Error: {json.dumps(state.last_error_report, default=str)}
-        - Reflection on Last Failure: {json.dumps(last_reflection, default=str)}
+        **Context**:
+        - **Problem Statement**: {state.problem_description}
+        - **Debugging History**:
+          - Hypotheses Already Tested and Failed: {json.dumps(state.hypotheses_tested)}
+          - Fix Strategies Already Attempted: {json.dumps(state.fixes_attempted)}
+          - Last Known Error Report: {json.dumps(state.last_error_report, default=str)}
+          - Reflection on Last Failure: {json.dumps(last_reflection, default=str)}
+        - **Current Evidence**:
+          {json.dumps(evidence, indent=2, default=str)}
 
-        **CURRENT EVIDENCE:**
-        {json.dumps(evidence, indent=2, default=str)}
+        **Your Task**:
+        1.  **Synthesize All Information**: Carefully consider the original problem, the history of failed attempts, and the latest evidence.
+        2.  **Formulate a New Hypothesis**: Based on your synthesis, generate a NEW and UNTRIED hypothesis. Do not repeat a hypothesis that has already been tested.
+        3.  **Determine a Solution Strategy**: Decide if the fix requires a small, targeted change ('SURGICAL') or a larger refactoring ('DESIGN_CHANGE').
 
-        Your analysis must be a valid JSON object with this structure:
+        **Constraints**:
+        - **Do Not Repeat Past Mistakes**: The `Debugging History` section shows what has already failed. Your new hypothesis must be different.
+        - **Be Actionable**: Your recommended strategy must be a clear, concrete action that another agent can take.
+
+        **Output Format**: You MUST return a single, valid JSON object with the following structure:
         {{
-            "root_cause_analysis": "Detailed explanation of the bug, incorporating insights from the reflection.",
-            "primary_hypothesis": "A NEW, UNTRIED hypothesis about the cause, guided by the reflection.",
+            "root_cause_analysis": "A detailed explanation of the bug, incorporating insights from the reflection on the last failure.",
+            "primary_hypothesis": "A NEW, UNTRIED hypothesis about the most likely cause of the failure.",
             "solution_type": "SURGICAL|DESIGN_CHANGE",
-            "recommended_strategy": "A NEW, UNTRIED approach to fix the issue."
+            "recommended_strategy": "A NEW, UNTRIED, and specific approach to fix the issue based on your new hypothesis."
         }}
         """
 
