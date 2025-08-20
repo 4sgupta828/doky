@@ -1,4 +1,5 @@
 # agents/debugging.py
+from datetime import datetime
 import json
 import logging
 from typing import Dict, Any, List, Optional
@@ -31,6 +32,7 @@ class DebuggingState:
     reflection_history: List[Dict] = field(default_factory=list) # Tracks reflections
     confidence: float = 1.0 # Starts high, degrades on failure
     last_error_report: Optional[Dict] = None
+    start_timestamp: str = field(default_factory=lambda: datetime.utcnow().isoformat())
 
 class DebuggingAgent(BaseAgent):
     """
@@ -70,6 +72,7 @@ class DebuggingAgent(BaseAgent):
 
         if not state.last_error_report:
             self.report_thinking("No initial test failure report. I must first write a test to reproduce the bug.")
+            state.start_timestamp = datetime.utcnow().isoformat() # Reset timestamp before bug is reproduced
             repro_result = self._reproduce_bug(state, inputs.get("code_context", {}), global_context)
             if not repro_result.success:
                 return self.create_result(success=False, message=f"Failed to reproduce the bug: {repro_result.message}")
@@ -79,7 +82,7 @@ class DebuggingAgent(BaseAgent):
             logger.info(f"--- Debugging Iteration {iteration + 1}/{max_iterations} (Confidence: {state.confidence:.2f}) ---")
             
             try:
-                evidence = self._gather_evidence(state.last_error_report, inputs.get("code_context", {}), global_context)
+                evidence = self._gather_evidence(state, inputs.get("code_context", {}), global_context)
                 hypothesis = self._analyze_and_hypothesize(evidence, state)
                 state.hypotheses_tested.append(hypothesis["primary_hypothesis"])
 
@@ -248,7 +251,7 @@ class DebuggingAgent(BaseAgent):
         }}
         """
 
-    def _gather_evidence(self, failed_report: Dict, code_context: Dict, env_data: Dict, context: GlobalContext) -> Dict:
+    def _gather_evidence(self, state: DebuggingState, code_context: Dict, env_data: Dict, context: GlobalContext) -> Dict:
         """
         Phase 1: Gather comprehensive evidence, both passively and actively.
         """
@@ -257,7 +260,7 @@ class DebuggingAgent(BaseAgent):
         self.report_thinking("Gathering evidence: collecting failure reports, system context, and actively scanning for logs.")
         
         evidence = {
-            "initial_failure": failed_report,
+            "initial_failure": state.last_error_report,
             "code_context": code_context,
             "environment_data": env_data,
             "log_scan_results": None, # Placeholder for active log scanning
@@ -279,11 +282,7 @@ class DebuggingAgent(BaseAgent):
         # --- Active Investigation: Scan for Logs ---
         self.report_progress("Actively scanning for logs...")
         try:
-            log_scan_result = scan_for_logs(
-                problem_description=state.problem_description,
-                agent_registry=self.agent_registry,
-                context=context
-            )
+            log_scan_result = scan_for_logs(state.problem_description, state.start_timestamp, self.agent_registry, context)
             if log_scan_result.success and log_scan_result.outputs.get("stdout"):
                 self.report_thinking("Log scan found potentially relevant information.")
                 evidence["log_scan_results"] = log_scan_result.outputs

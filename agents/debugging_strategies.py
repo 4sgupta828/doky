@@ -3,7 +3,7 @@ import logging
 import json
 import re
 import uuid
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 
 # Foundational dependencies
 from .base import BaseAgent
@@ -19,27 +19,13 @@ def _discover_log_configurations(agent_registry: Dict[str, BaseAgent], context: 
     Returns a list of potential log file paths.
     """
     discovered_paths = []
-    file_system_agent = agent_registry.get("FileSystemAgent")
     tooling_agent = agent_registry.get("ToolingAgent")
 
-    if not file_system_agent or not tooling_agent:
-        logger.warning("Required agents for log discovery are not available.")
+    if not tooling_agent:
+        logger.warning("ToolingAgent not available for log discovery.")
         return []
 
-    # 1. Look for common logging configuration files
-    discovery_result = file_system_agent.execute_v2(
-        goal="Discover logging configuration files",
-        inputs={
-            "operation": "discover",
-            "patterns": ["logging.conf", "logging.ini", "logging.yaml", "*.log"],
-            "recursive": True
-        },
-        global_context=context
-    )
-    if discovery_result.success and discovery_result.outputs.get("discovered_files"):
-        discovered_paths.extend(discovery_result.outputs["discovered_files"])
-
-    # 2. Grep for logging setup in Python files
+    # Grep for logging setup in Python files to find explicit filenames
     grep_command = "grep -r 'logging.basicConfig' . --include '*.py'"
     grep_result = tooling_agent.execute_v2(
         goal="Find logging setup in Python files",
@@ -48,7 +34,6 @@ def _discover_log_configurations(agent_registry: Dict[str, BaseAgent], context: 
     )
 
     if grep_result.success:
-        # Parse the output to find filename arguments
         for line in grep_result.outputs.get("stdout", "").splitlines():
             match = re.search(r"filename=['\"]([^'\"]+)['\"]", line)
             if match:
@@ -58,10 +43,10 @@ def _discover_log_configurations(agent_registry: Dict[str, BaseAgent], context: 
     return sorted(list(set(p for p in discovered_paths if p)))
 
 
-def scan_for_logs(problem_description: str, agent_registry: Dict[str, BaseAgent], context: GlobalContext) -> AgentResult:
+def scan_for_logs(problem_description: str, failure_timestamp: str, agent_registry: Dict[str, BaseAgent], context: GlobalContext) -> AgentResult:
     """
     An investigation strategy to actively scan for relevant error logs. It first
-    tries to discover logging configurations and falls back to common locations.
+    tries to discover logging configurations and then performs a targeted, time-based search.
     """
     tooling_agent = agent_registry.get("ToolingAgent")
     if not tooling_agent:
@@ -70,27 +55,45 @@ def scan_for_logs(problem_description: str, agent_registry: Dict[str, BaseAgent]
     logger.info("Discovering logging configurations in the codebase...")
     configured_log_files = _discover_log_configurations(agent_registry, context)
     
-    keywords = problem_description.split()[:5]
-    keyword_pattern = '|'.join(keywords)
+    # Define search patterns beyond simple keywords
+    patterns = [
+        "Traceback (most recent call last):",
+        "CRITICAL",
+        "FATAL",
+        "ERROR",
+        "Exception",
+        "ValueError",
+        "TypeError",
+        "KeyError",
+        "IndexError"
+    ]
+    
+    # Add keywords from the problem description
+    patterns.extend(problem_description.split()[:5])
+    search_pattern = '|'.join(set(patterns)) # Use a unique set of patterns
+    
     log_scan_commands = []
 
+    # Prioritize searching in configured log files
     if configured_log_files:
-        logger.info(f"Found potential log files: {configured_log_files}. Performing targeted scan.")
+        logger.info(f"Found potential log files: {configured_log_files}. Performing targeted, time-based scan.")
         files_to_scan = " ".join([f'"{path}"' for path in configured_log_files])
-        log_scan_commands.append(f"grep -iE '{keyword_pattern}' {files_to_scan} | tail -n 100")
+        # Use awk to filter logs since the failure timestamp
+        log_scan_commands.append(f"awk '$0 >= \"{failure_timestamp}\"' {files_to_scan} | grep -iE '{search_pattern}' | tail -n 200")
     
-    logger.info("Adding fallback search for common log locations.")
+    # Add fallback search for common locations
+    logger.info("Adding fallback search for common project and system log locations.")
     log_scan_commands.extend([
-        f"find . -name '*.log' -print0 | xargs -0 grep -iE '{keyword_pattern}' | tail -n 50",
-        f"grep -iE '{keyword_pattern}' /var/log/*.log /var/log/syslog | tail -n 50"
+        f"find . -name '*.log' -newermt '{failure_timestamp}' -print0 | xargs -0 grep -iE '{search_pattern}' | tail -n 100",
+        f"journalctl --since '{failure_timestamp}' | grep -iE '{search_pattern}' | tail -n 100" # For systemd logs
     ])
 
     return tooling_agent.execute_v2(
-        goal="Scan for relevant error logs based on the problem description.",
+        goal="Scan for relevant error logs since the last failure.",
         inputs={
             "commands": log_scan_commands,
-            "purpose": "Log Scanning",
-            "ignore_errors": True
+            "purpose": "Time-based Log Scanning",
+            "ignore_errors": True # Don't stop if one command fails
         },
         global_context=context
     )
