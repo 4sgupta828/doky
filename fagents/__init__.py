@@ -6,6 +6,8 @@ from typing import Dict, Type
 from .base import FoundationalAgent
 from .analyst import AnalystAgent
 from .strategist import StrategistAgent
+from .creator import CreatorAgent
+from .surgeon import SurgeonAgent
 
 # Get a logger instance for this module
 logger = logging.getLogger(__name__)
@@ -14,12 +16,16 @@ logger = logging.getLogger(__name__)
 FOUNDATIONAL_AGENT_REGISTRY: Dict[str, Type[FoundationalAgent]] = {
     "AnalystAgent": AnalystAgent,
     "StrategistAgent": StrategistAgent,
+    "CreatorAgent": CreatorAgent,
+    "SurgeonAgent": SurgeonAgent,
 }
 
 # User-friendly aliases for foundational agents
 FOUNDATIONAL_AGENT_ALIASES: Dict[str, str] = {
     "@analyst": "AnalystAgent",
     "@strategist": "StrategistAgent",
+    "@creator": "CreatorAgent",
+    "@surgeon": "SurgeonAgent",
 }
 
 def get_foundational_agent(agent_name: str) -> FoundationalAgent:
