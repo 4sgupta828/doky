@@ -792,13 +792,3 @@ class WorkflowAdapterAgent(BaseAgent):
     
     def _capture_context_snapshot(self, context: GlobalContext) -> Dict[str, Any]:
         return {"timestamp": datetime.now().isoformat()}  # Placeholder
-
-    # Legacy execute method for compatibility
-    def execute(self, goal: str, context: GlobalContext, current_task: TaskNode) -> AgentResponse:
-        """Legacy execute method for backward compatibility."""
-        # This shouldn't typically be called directly
-        return AgentResponse(
-            success=False,
-            message="WorkflowAdapterAgent requires strategic plan input via execute_v2",
-            artifacts_generated=[]
-        )

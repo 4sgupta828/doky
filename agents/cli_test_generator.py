@@ -33,51 +33,6 @@ class CLITestGeneratorAgent(BaseAgent):
     def optional_inputs(self) -> List[str]:
         return ["specification", "output_directory", "test_file_name"]
     
-    def execute(self, goal: str, context: GlobalContext, current_task: TaskNode) -> AgentResponse:
-        """Legacy execute method - tries to infer inputs from context."""
-        # Try to get code files from artifacts or recent files
-        code_files = {}
-        specification = goal  # Use goal as specification
-        
-        # Look for recent Python files in artifacts
-        for artifact_key in context.list_artifacts():
-            if artifact_key.endswith('.py') or 'code' in artifact_key.lower():
-                content = context.get_artifact(artifact_key)
-                if content and isinstance(content, str):
-                    code_files[artifact_key] = content
-        
-        # If no artifacts, try to get from workspace
-        if not code_files:
-            try:
-                workspace_files = context.workspace.list_files()
-                for file_path in workspace_files:
-                    if file_path.endswith('.py'):
-                        content = context.workspace.get_file_content(file_path)
-                        if content:
-                            code_files[file_path] = content
-            except:
-                pass
-        
-        if not code_files:
-            return AgentResponse(
-                success=False,
-                message="No Python code files found to generate tests for"
-            )
-        
-        inputs = {
-            'code_files': code_files,
-            'specification': specification,
-            'output_directory': context.workspace_path
-        }
-        
-        result = self.execute_v2(goal, inputs, context)
-        
-        return AgentResponse(
-            success=result.success,
-            message=result.message,
-            artifacts_generated=[result.outputs.get('test_script')] if result.outputs.get('test_script') else []
-        )
-    
     def execute_v2(self, goal: str, inputs: Dict[str, Any], global_context: GlobalContext) -> AgentResult:
         """Generate CLI test script for the code."""
         self.validate_inputs(inputs)

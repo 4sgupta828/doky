@@ -656,19 +656,3 @@ class DebuggingOrchestratorAgent(BaseAgent):
             recommendations.append(f"Monitor resolved issues ({len(resolved_issues)} issues) to ensure fixes are stable")
 
         return recommendations
-
-    # Legacy execute method for backward compatibility
-    def execute(self, goal: str, context: GlobalContext, current_task: TaskNode) -> AgentResponse:
-        """Legacy execute method - converts to new interface."""
-        inputs = {
-            'problem_description': goal,
-            'orchestration_mode': 'standard'
-        }
-        
-        result = self.execute_v2(goal, inputs, context)
-        
-        return AgentResponse(
-            success=result.success,
-            message=result.message,
-            artifacts_generated=[]
-        )

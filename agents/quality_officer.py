@@ -6,7 +6,7 @@ from typing import Dict, Any, List
 # Foundational dependencies
 from .base import BaseAgent
 from core.context import GlobalContext
-from core.models import AgentResponse, TaskNode
+from core.models import AgentResponse, AgentResult, TaskNode
 
 # Get a logger instance for this module
 logger = logging.getLogger(__name__)
@@ -33,6 +33,174 @@ class QualityOfficerAgent(BaseAgent):
             description="Performs static analysis, dependency audits, and security scans."
         )
         self.llm_client = llm_client or LLMClient()
+
+    def required_inputs(self) -> List[str]:
+        """Required inputs for quality audit."""
+        return []  # No required inputs - scans workspace automatically
+
+    def optional_inputs(self) -> List[str]:
+        """Optional inputs for quality audit."""
+        return ["file_filter", "severity_threshold"]
+
+    def execute_v2(self, goal: str, inputs: Dict[str, Any], global_context: GlobalContext) -> AgentResult:
+        """
+        V2 interface for quality and security auditing.
+        
+        Args:
+            goal: Description of what to audit
+            inputs: Optional parameters like 'file_filter', 'severity_threshold'
+            global_context: The shared context with workspace access
+            
+        Returns:
+            AgentResult with audit results and generated report
+        """
+        try:
+            self.validate_inputs(inputs)
+            
+            logger.info(f"QualityOfficerAgent executing audit with goal: '{goal}'")
+            self.report_progress("Starting quality audit", "Scanning workspace for code files")
+
+            # Get optional filters from inputs
+            file_filter = inputs.get("file_filter", ".py")
+            severity_threshold = inputs.get("severity_threshold", "Low")
+
+            # 1. Gather all application code from the workspace.
+            all_files = global_context.workspace.list_files()
+            app_code_files = [
+                f for f in all_files 
+                if f.endswith(file_filter) and not f.startswith('tests/')
+            ]
+            
+            if not app_code_files:
+                return self.create_result(
+                    success=True,
+                    message="No application code files found to audit.",
+                    outputs={"files_scanned": 0, "issues_found": 0}
+                )
+
+            self.report_progress("Collecting code files", f"Found {len(app_code_files)} files to analyze")
+
+            all_code = {}
+            for file_path in app_code_files:
+                content = global_context.workspace.get_file_content(file_path)
+                if content:
+                    all_code[file_path] = content
+
+            if not all_code:
+                return self.create_result(
+                    success=True,
+                    message="Application code files were found, but they are all empty.",
+                    outputs={"files_scanned": len(app_code_files), "issues_found": 0}
+                )
+
+            self.report_thinking("Analyzing code for security vulnerabilities and quality issues")
+            
+            # 2. Invoke the LLM to perform the audit.
+            quality_schema = {
+                "type": "object",
+                "properties": {
+                    "issues": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "severity": {"type": "string"},
+                                "category": {"type": "string"},
+                                "file": {"type": "string"},
+                                "line": {"type": "number"},
+                                "message": {"type": "string"},
+                                "fix": {"type": "string"}
+                            },
+                            "required": ["severity", "category", "file", "message"]
+                        },
+                        "description": "Array of quality issues found in the code"
+                    }
+                },
+                "required": ["issues"]
+            }
+
+            self.report_progress("Running audit analysis", "Analyzing code quality and security")
+
+            try:
+                prompt = self._build_prompt(all_code)
+                
+                # Use regular invoke by default, fall back to function calling if needed
+                logger.debug("Using regular invoke method (primary approach)")
+                llm_response_str = self.llm_client.invoke(prompt)
+                
+                # Check if the response is valid JSON with actual content
+                try:
+                    test_parse = json.loads(llm_response_str)
+                    if not isinstance(test_parse, dict) or "issues" not in test_parse:
+                        raise ValueError("Invalid or empty response")
+                    logger.debug("Regular invoke succeeded with valid JSON response")
+                except (json.JSONDecodeError, ValueError) as e:
+                    logger.warning(f"Regular invoke failed to produce valid JSON ({e}), trying function calling")
+                    if hasattr(self.llm_client, 'invoke_with_schema'):
+                        try:
+                            llm_response_str = self.llm_client.invoke_with_schema(prompt, quality_schema)
+                            logger.debug("Function calling fallback succeeded")
+                        except Exception as fallback_error:
+                            logger.error(f"Function calling fallback also failed: {fallback_error}")
+                            # Keep the original response from regular invoke for error reporting
+                            pass
+                    else:
+                        logger.warning("Function calling not available, keeping original response")
+                
+                quality_report = json.loads(llm_response_str)
+
+                if "issues" not in quality_report or not isinstance(quality_report["issues"], list):
+                    raise ValueError("LLM response is missing the 'issues' list.")
+
+                self.report_progress("Processing audit results", f"Found {len(quality_report['issues'])} potential issues")
+
+                # 3. Add the report artifact to the context.
+                output_artifact_key = "quality_and_security_report.json"
+                global_context.add_artifact(output_artifact_key, quality_report)
+
+                issue_count = len(quality_report["issues"])
+                msg = f"Audit complete. Found {issue_count} potential issues." if issue_count > 0 else "Audit complete. No issues found."
+                
+                self.report_progress("Audit completed", msg)
+                
+                return self.create_result(
+                    success=True,
+                    message=msg,
+                    outputs={
+                        "files_scanned": len(all_code),
+                        "issues_found": issue_count,
+                        "report_artifact": output_artifact_key,
+                        "issues": quality_report["issues"]
+                    }
+                )
+
+            except NotImplementedError as e:
+                error_msg = f"Cannot execute audit: {e}"
+                self.fail_step(error_msg, ["Implement LLM client", "Configure audit tools"])
+                return self.create_result(
+                    success=False,
+                    message=error_msg,
+                    error_details={"exception": str(e), "type": "not_implemented"}
+                )
+            except (json.JSONDecodeError, ValueError) as e:
+                error_msg = f"Failed to parse LLM response for audit report. Error: {e}"
+                logger.error(error_msg)
+                self.fail_step(error_msg, ["Check LLM response format", "Verify JSON structure"])
+                return self.create_result(
+                    success=False,
+                    message=error_msg,
+                    error_details={"exception": str(e), "type": "parsing_error"}
+                )
+                
+        except Exception as e:
+            error_msg = f"Unexpected error during code audit: {e}"
+            logger.error(error_msg, exc_info=True)
+            self.fail_step(error_msg)
+            return self.create_result(
+                success=False,
+                message=error_msg,
+                error_details={"exception": str(e), "type": "unexpected_error"}
+            )
 
     def _build_prompt(self, all_code: Dict[str, str]) -> str:
         """Constructs a detailed prompt to guide the LLM in auditing the code."""
@@ -87,109 +255,6 @@ class QualityOfficerAgent(BaseAgent):
         If no issues are found, return an object with an empty `issues` list. Now, conduct the audit.
         """
 
-    def execute(self, goal: str, context: GlobalContext, current_task: TaskNode) -> AgentResponse:
-        logger.info(f"ChiefQualityOfficerAgent executing with goal: '{goal}'")
-        
-        # Report meaningful progress
-        self.report_progress("Quality audit", "Analyzing code quality and security")
-
-        # 1. Gather all application code from the workspace.
-        all_files = context.workspace.list_files()
-        app_code_files = [
-            f for f in all_files 
-            if f.endswith('.py') and not f.startswith('tests/')
-        ]
-        
-        if not app_code_files:
-            return AgentResponse(success=True, message="No application code (.py files) found to audit.")
-
-        all_code = {}
-        for file_path in app_code_files:
-            content = context.workspace.get_file_content(file_path)
-            if content:
-                all_code[file_path] = content
-
-        if not all_code:
-            return AgentResponse(success=True, message="Application code files were found, but they are all empty.")
-
-        # 2. Invoke the LLM to perform the audit.
-        # Define JSON schema for guaranteed structured response
-        quality_schema = {
-            "type": "object",
-            "properties": {
-                "issues": {
-                    "type": "array",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "severity": {"type": "string"},
-                            "category": {"type": "string"},
-                            "file": {"type": "string"},
-                            "line": {"type": "number"},
-                            "message": {"type": "string"},
-                            "fix": {"type": "string"}
-                        },
-                        "required": ["severity", "category", "file", "message"]
-                    },
-                    "description": "Array of quality issues found in the code"
-                }
-            },
-            "required": ["issues"]
-        }
-
-        try:
-            prompt = self._build_prompt(all_code)
-            
-            # Use regular invoke by default, fall back to function calling if needed
-            logger.debug("Using regular invoke method (primary approach)")
-            llm_response_str = self.llm_client.invoke(prompt)
-            
-            # Check if the response is valid JSON with actual content
-            try:
-                test_parse = json.loads(llm_response_str)
-                if not isinstance(test_parse, dict) or "issues" not in test_parse:
-                    raise ValueError("Invalid or empty response")
-                logger.debug("Regular invoke succeeded with valid JSON response")
-            except (json.JSONDecodeError, ValueError) as e:
-                logger.warning(f"Regular invoke failed to produce valid JSON ({e}), trying function calling")
-                if hasattr(self.llm_client, 'invoke_with_schema'):
-                    try:
-                        llm_response_str = self.llm_client.invoke_with_schema(prompt, quality_schema)
-                        logger.debug("Function calling fallback succeeded")
-                    except Exception as fallback_error:
-                        logger.error(f"Function calling fallback also failed: {fallback_error}")
-                        # Keep the original response from regular invoke for error reporting
-                        pass
-                else:
-                    logger.warning("Function calling not available, keeping original response")
-            
-            quality_report = json.loads(llm_response_str)
-
-            if "issues" not in quality_report or not isinstance(quality_report["issues"], list):
-                raise ValueError("LLM response is missing the 'issues' list.")
-
-        except NotImplementedError as e:
-            return AgentResponse(success=False, message=f"Cannot execute audit: {e}")
-        except (json.JSONDecodeError, ValueError) as e:
-            return AgentResponse(success=False, message=f"Failed to parse LLM response for audit report. Error: {e}")
-        except Exception as e:
-            return AgentResponse(success=False, message=f"An unexpected error occurred during code audit: {e}")
-
-        # 3. Add the report artifact to the context.
-        output_artifact_key = "quality_and_security_report.json"
-        context.add_artifact(output_artifact_key, quality_report, current_task.task_id)
-
-        issue_count = len(quality_report["issues"])
-        msg = f"Audit complete. Found {issue_count} potential issues." if issue_count > 0 else "Audit complete. No issues found."
-        
-        return AgentResponse(
-            success=True,
-            message=msg,
-            artifacts_generated=[output_artifact_key]
-        )
-
-
-# --- Self-Testing Block ---
 if __name__ == "__main__":
     import unittest
     from unittest.mock import MagicMock

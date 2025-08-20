@@ -14,7 +14,6 @@ from .code_manifest import CodeManifestAgent
 from .coder import CoderAgent
 from .test_generator import TestGenerationAgent
 from .test_runner import TestRunnerAgent
-from .context_builder import ContextBuilderAgent
 from .tooling import ToolingAgent
 from .debugging import DebuggingAgent
 from .script_executor import ScriptExecutorAgent
@@ -25,7 +24,6 @@ from .cli_test_generator import CLITestGeneratorAgent
 from .execution_validator import ExecutionValidatorAgent
 
 # Intelligence Layer Agents - Phase 1 Implementation
-from .master_intelligence import MasterIntelligenceAgent
 from .workflow_adapter import WorkflowAdapterAgent
 
 # New Agent Architecture - Aligned with 21-Agent Plan
@@ -36,14 +34,13 @@ from .problem_analysis import ProblemAnalysisAgent
 
 # Specialized Tier (Write-only)
 # Note: CodeModifierAgent was removed as it contained validation logic, not modification logic
-from .test_modifier import TestModifierAgent
 from .documentation import DocumentationAgent
 
 # Infrastructure Tier (System operations)
+from .file_system import FileSystemAgent
 from .environment_modifier import EnvironmentModifierAgent
 from .dependency_modifier import DependencyModifierAgent
 from .configuration_modifier import ConfigurationModifierAgent
-from .process_executor import ProcessExecutorAgent
 
 # Coordination Tier (Orchestrators)
 from .requirements_orchestrator import RequirementsOrchestratorAgent
@@ -59,7 +56,7 @@ logger = logging.getLogger(__name__)
 # It is the single source of truth for all available agents in the system.
 AGENT_REGISTRY: Dict[str, Type[BaseAgent]] = {
     # Intelligence Layer - Phase 1 Implementation
-    "MasterIntelligenceAgent": MasterIntelligenceAgent,
+    # "MasterIntelligenceAgent": MasterIntelligenceAgent,  # File does not exist
     "WorkflowAdapterAgent": WorkflowAdapterAgent,
 
     # Analysis Tier - Read-only analysis agents
@@ -69,10 +66,11 @@ AGENT_REGISTRY: Dict[str, Type[BaseAgent]] = {
     
     # Specialized Tier - Write-only modification agents
     # Note: CodeModifierAgent removed - contained validation logic, not modification
-    "TestModifierAgent": TestModifierAgent,
+    # "TestModifierAgent": TestModifierAgent,  # File does not exist
     "DocumentationAgent": DocumentationAgent,
     
     # Infrastructure Tier - System operation agents
+    "FileSystemAgent": FileSystemAgent,
     "EnvironmentModifierAgent": EnvironmentModifierAgent,
     "DependencyModifierAgent": DependencyModifierAgent,
     "ConfigurationModifierAgent": ConfigurationModifierAgent,
@@ -100,7 +98,7 @@ AGENT_REGISTRY: Dict[str, Type[BaseAgent]] = {
     "ExecutionValidatorAgent": ExecutionValidatorAgent,
 
     # Research & Environment Agents
-    "ContextBuilderAgent": ContextBuilderAgent,
+    # "ContextBuilderAgent": ContextBuilderAgent,  # File does not exist
     "ToolingAgent": ToolingAgent,
 
     # Diagnostics & Quality Agents
@@ -113,7 +111,7 @@ AGENT_REGISTRY: Dict[str, Type[BaseAgent]] = {
 AGENT_ALIASES: Dict[str, str] = {
     "@help": "HelpAgent", # A virtual agent for the help command
     # Intelligence Layer
-    "@intelligence": "MasterIntelligenceAgent",
+    # "@intelligence": "MasterIntelligenceAgent",  # File does not exist
     "@workflow": "WorkflowAdapterAgent",
     # Analysis Tier
     "@code-analysis": "CodeAnalysisAgent",
@@ -121,9 +119,10 @@ AGENT_ALIASES: Dict[str, str] = {
     "@problem-analysis": "ProblemAnalysisAgent",
     # Specialized Tier
     # Note: @code-modifier alias removed with CodeModifierAgent
-    "@test-modifier": "TestModifierAgent",
+    # "@test-modifier": "TestModifierAgent",  # File does not exist
     "@docs": "DocumentationAgent",
     # Infrastructure Tier
+    "@filesystem": "FileSystemAgent",
     "@env-modifier": "EnvironmentModifierAgent",
     "@dependency": "DependencyModifierAgent",
     "@config": "ConfigurationModifierAgent",
@@ -145,7 +144,7 @@ AGENT_ALIASES: Dict[str, str] = {
     "@cli-test": "CLITestGeneratorAgent", 
     "@validate": "ExecutionValidatorAgent",
     # Environment & Diagnostics
-    "@context": "ContextBuilderAgent",
+    # "@context": "ContextBuilderAgent",  # File does not exist
     "@run": "ToolingAgent",
     "@debug": "DebuggingAgent",
     "@script": "ScriptExecutorAgent",
@@ -214,19 +213,19 @@ if __name__ == "__main__":
         def test_registry_population(self):
             """Tests if the registry contains all the expected agents."""
             print("\n--- [Test Case 1: Registry Population] ---")
-            self.assertEqual(len(AGENT_REGISTRY), 29)  # Updated count after removing TestAnalysisAgent
+            self.assertEqual(len(AGENT_REGISTRY), 26)  # Updated: removed MasterIntelligenceAgent, added FileSystemAgent
             self.assertIn("PlannerAgent", AGENT_REGISTRY)
             self.assertIn("CoderAgent", AGENT_REGISTRY)
             self.assertIn("TestRunnerAgent", AGENT_REGISTRY)
             # Check new intelligence agents
-            self.assertIn("MasterIntelligenceAgent", AGENT_REGISTRY)
+            # self.assertIn("MasterIntelligenceAgent", AGENT_REGISTRY)  # File does not exist
             self.assertIn("WorkflowAdapterAgent", AGENT_REGISTRY)
             # Check new tier agents
             self.assertIn("CodeAnalysisAgent", AGENT_REGISTRY)
             self.assertIn("EnvironmentAnalysisAgent", AGENT_REGISTRY)
             self.assertIn("ProblemAnalysisAgent", AGENT_REGISTRY)
-            self.assertIn("CodeModifierAgent", AGENT_REGISTRY)
-            self.assertIn("TestModifierAgent", AGENT_REGISTRY)
+            # self.assertIn("CodeModifierAgent", AGENT_REGISTRY)  # Removed
+            # self.assertIn("TestModifierAgent", AGENT_REGISTRY)  # File does not exist
             self.assertIn("EnvironmentModifierAgent", AGENT_REGISTRY)
             self.assertIn("DependencyModifierAgent", AGENT_REGISTRY)
             self.assertIn("ConfigurationModifierAgent", AGENT_REGISTRY)

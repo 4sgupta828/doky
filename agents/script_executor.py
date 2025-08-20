@@ -12,7 +12,7 @@ from pathlib import Path
 # Foundational dependencies
 from .base import BaseAgent
 from core.context import GlobalContext
-from core.models import AgentResponse, TaskNode
+from core.models import AgentResult, TaskNode
 from core.instruction_schemas import (
     InstructionScript, StructuredInstruction, InstructionResult, ScriptExecutionResult,
     InstructionType, CodeTarget
@@ -46,75 +46,146 @@ class ScriptExecutorAgent(BaseAgent):
         self.backup_dir = None
         self.execution_history: List[ScriptExecutionResult] = []
 
-    def execute(self, goal: str, context: GlobalContext, current_task: TaskNode) -> AgentResponse:
-        """Execute a structured instruction script."""
-        logger.info(f"ScriptExecutorAgent executing with goal: '{goal}'")
-        self.report_progress("Initializing script execution", f"Processing: '{goal[:80]}...'")
+    def required_inputs(self) -> List[str]:
+        """Required inputs for script execution."""
+        return ["script_artifact_key"]  # Must specify which artifact contains the script
+
+    def optional_inputs(self) -> List[str]:
+        """Optional inputs for script execution."""
+        return ["backup_enabled", "dry_run", "validation_mode"]
+
+    def execute_v2(self, goal: str, inputs: Dict[str, Any], global_context: GlobalContext) -> AgentResult:
+        """
+        V2 interface for script execution.
         
-        try:
-            # 1. Look for instruction script in context
-            script = self._load_instruction_script(context, current_task)
-            if not script:
-                return AgentResponse(
-                    success=False,
-                    message="No instruction script found in context. Expected 'instruction_script.json' artifact."
-                )
+        Args:
+            goal: Description of what the script should accomplish
+            inputs: Must contain 'script_artifact_key', optionally 'backup_enabled', 'dry_run', 'validation_mode'
+            global_context: The shared context with script artifacts and workspace access
             
+        Returns:
+            AgentResult with execution status and modified files list
+        """
+        try:
+            self.validate_inputs(inputs)
+            
+            script_artifact_key = inputs["script_artifact_key"]
+            backup_enabled = inputs.get("backup_enabled", self.backup_enabled)
+            dry_run = inputs.get("dry_run", False)
+            validation_mode = inputs.get("validation_mode", "standard")
+            
+            logger.info(f"ScriptExecutorAgent executing with goal: '{goal}'")
+            self.report_progress("Initializing script execution", f"Processing: '{goal[:80]}...'")
+
+            # 1. Load instruction script from specified artifact
+            script_data = global_context.get_artifact(script_artifact_key)
+            if not script_data:
+                return self.create_result(
+                    success=False,
+                    message=f"No instruction script found in artifact '{script_artifact_key}'.",
+                    error_details={"issue": "missing_artifact", "artifact_key": script_artifact_key}
+                )
+
+            try:
+                if isinstance(script_data, str):
+                    script_dict = json.loads(script_data)
+                else:
+                    script_dict = script_data
+                
+                script = InstructionScript(**script_dict)
+            except Exception as e:
+                return self.create_result(
+                    success=False,
+                    message=f"Failed to parse instruction script: {e}",
+                    error_details={"exception": str(e), "type": "parsing_error"}
+                )
+
             self.report_thinking(f"Loaded instruction script '{script.title}' with {len(script.instructions)} instructions")
             self.report_intermediate_output("instruction_script", {
                 "title": script.title,
                 "description": script.description,
                 "instructions_count": len(script.instructions),
-                "estimated_duration": script.estimated_duration
+                "estimated_duration": script.estimated_duration,
+                "dry_run": dry_run
             })
-            
-            # 2. Setup backup if required
-            if script.backup_required and self.backup_enabled:
-                self._setup_backup(context, script)
+
+            # 2. Setup backup if required (unless dry run)
+            if script.backup_required and backup_enabled and not dry_run:
+                self._setup_backup(global_context, script)
                 self.report_progress("Backup created", f"Files backed up to: {self.backup_dir}")
-            
+
             # 3. Execute the script
-            self.report_progress("Executing script", f"Running {len(script.instructions)} instructions")
-            execution_result = self._execute_script(script, context, current_task)
+            self.report_progress("Executing script", 
+                f"{'[DRY RUN] ' if dry_run else ''}Running {len(script.instructions)} instructions")
             
-            # 4. Store results and history
-            self.execution_history.append(execution_result)
-            context.add_artifact(
-                f"script_execution_result_{script.script_id}.json", 
-                execution_result.model_dump_json(indent=2), 
-                current_task.task_id
+            # Create a mock TaskNode for compatibility with existing methods
+            mock_task = TaskNode(
+                task_id=f"script_exec_{script.script_id}",
+                goal=goal,
+                assigned_agent=self.name
             )
             
+            execution_result = self._execute_script(script, global_context, mock_task)
+
+            # 4. Store results and history
+            self.execution_history.append(execution_result)
+            result_artifact_key = f"script_execution_result_{script.script_id}.json"
+            global_context.add_artifact(
+                result_artifact_key, 
+                execution_result.model_dump_json(indent=2)
+            )
+
             # 5. Report final results
             if execution_result.success:
+                success_msg = f"Successfully executed script '{script.title}': {execution_result.message}"
+                if dry_run:
+                    success_msg = f"[DRY RUN] {success_msg}"
+                
                 self.report_progress("Script execution successful", 
                     f"Completed {execution_result.successful_instructions}/{execution_result.total_instructions} instructions")
-                self.report_thinking(f"Successfully executed script '{script.title}'. All validations passed.")
                 
-                return AgentResponse(
+                return self.create_result(
                     success=True,
-                    message=f"Successfully executed script '{script.title}': {execution_result.message}",
-                    artifacts_generated=[f"script_execution_result_{script.script_id}.json"] + execution_result.files_modified
+                    message=success_msg,
+                    outputs={
+                        "script_executed": True,
+                        "instructions_completed": execution_result.successful_instructions,
+                        "total_instructions": execution_result.total_instructions,
+                        "files_modified": execution_result.files_modified,
+                        "execution_result_artifact": result_artifact_key,
+                        "dry_run": dry_run
+                    }
                 )
             else:
+                failure_msg = f"Script execution failed: {execution_result.message}"
+                if execution_result.rollback_available:
+                    failure_msg += " Rollback is available if needed."
+                
                 self.report_progress("Script execution failed", 
                     f"Failed at instruction {execution_result.failed_instructions}/{execution_result.total_instructions}")
                 
-                # Offer rollback if available
-                rollback_msg = ""
-                if execution_result.rollback_available:
-                    rollback_msg = " Rollback is available if needed."
-                    
-                return AgentResponse(
+                return self.create_result(
                     success=False,
-                    message=f"Script execution failed: {execution_result.message}{rollback_msg}",
-                    artifacts_generated=[f"script_execution_result_{script.script_id}.json"]
+                    message=failure_msg,
+                    outputs={
+                        "script_executed": False,
+                        "instructions_completed": execution_result.successful_instructions,
+                        "total_instructions": execution_result.total_instructions,
+                        "execution_result_artifact": result_artifact_key,
+                        "rollback_available": execution_result.rollback_available
+                    },
+                    error_details={"execution_failure": execution_result.message}
                 )
-                
+
         except Exception as e:
-            error_msg = f"ScriptExecutorAgent encountered unexpected error: {e}"
+            error_msg = f"Unexpected error during script execution: {e}"
             logger.error(error_msg, exc_info=True)
-            return AgentResponse(success=False, message=error_msg)
+            self.fail_step(error_msg)
+            return self.create_result(
+                success=False,
+                message=error_msg,
+                error_details={"exception": str(e), "type": "unexpected_error"}
+            )
 
     def _load_instruction_script(self, context: GlobalContext, current_task: TaskNode) -> Optional[InstructionScript]:
         """Load instruction script from context artifacts."""

@@ -107,34 +107,3 @@ class CodeAnalysisAgent(BaseAgent):
                 message=error_msg,
                 error_details={"exception": str(e)}
             )
-
-
-    # Legacy execute method for backward compatibility
-    def execute(self, goal: str, context: GlobalContext, current_task: TaskNode) -> AgentResponse:
-        """Legacy execute method for backward compatibility."""
-        # Try to get code files from workspace
-        code_files = {}
-        try:
-            workspace_files = context.workspace.list_files()
-            for file_path in workspace_files:
-                if file_path.endswith('.py'):
-                    content = context.workspace.get_file_content(file_path)
-                    if content:
-                        code_files[file_path] = content
-        except:
-            pass
-        
-        if not code_files:
-            return AgentResponse(
-                success=False,
-                message="No Python code files found to validate"
-            )
-        
-        inputs = {"code_files": code_files}
-        result = self.execute_v2(goal, inputs, context)
-        
-        return AgentResponse(
-            success=result.success,
-            message=result.message,
-            artifacts_generated=[]
-        )

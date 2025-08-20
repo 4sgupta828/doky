@@ -1,12 +1,12 @@
 # agents/plan_refiner.py
 import json
 import logging
-from typing import Dict, Any
+from typing import Dict, Any, List
 
 # Foundational dependencies
 from .base import BaseAgent
 from core.context import GlobalContext
-from core.models import AgentResponse, TaskNode, TaskGraph, ValidationError
+from core.models import AgentResult, TaskNode, TaskGraph, ValidationError
 
 # Get a logger instance for this module
 logger = logging.getLogger(__name__)
@@ -33,6 +33,160 @@ class PlanRefinementAgent(BaseAgent):
             description="Refines an existing task plan based on user feedback, questions, or comments."
         )
         self.llm_client = llm_client or LLMClient()
+
+    def required_inputs(self) -> List[str]:
+        """Required inputs for plan refinement."""
+        return ["user_feedback"]
+
+    def optional_inputs(self) -> List[str]:
+        """Optional inputs for plan refinement."""
+        return []
+
+    def execute_v2(self, goal: str, inputs: Dict[str, Any], global_context: GlobalContext) -> AgentResult:
+        """
+        V2 interface for plan refinement.
+        
+        Args:
+            goal: Description of what refinement to perform
+            inputs: Must contain 'user_feedback' with the refinement request
+            global_context: The shared context containing the task graph to refine
+            
+        Returns:
+            AgentResult with success status and refined task graph details
+        """
+        try:
+            self.validate_inputs(inputs)
+            user_feedback = inputs["user_feedback"]
+            
+            logger.info(f"PlanRefinementAgent executing with feedback: '{user_feedback}'")
+            self.report_progress("Processing refinement request", f"Feedback: {user_feedback[:60]}...")
+            
+            # Get the current plan from the context.
+            current_plan_json = global_context.task_graph.model_dump(mode='json')
+            if not current_plan_json.get("nodes"):
+                return self.create_result(
+                    success=False,
+                    message="No active plan to refine.",
+                    error_details={"issue": "empty_task_graph"}
+                )
+
+            self.report_thinking("Analyzing current plan structure and user feedback")
+            
+            # Define JSON schema for guaranteed structured response
+            refinement_schema = {
+                "type": "object",
+                "properties": {
+                    "response_to_user": {
+                        "type": "string",
+                        "description": "Natural language response to the user's feedback"
+                    },
+                    "updated_task_graph": {
+                        "type": "object",
+                        "properties": {
+                            "nodes": {
+                                "type": "object",
+                                "additionalProperties": {
+                                    "type": "object",
+                                    "properties": {
+                                        "task_id": {"type": "string"},
+                                        "goal": {"type": "string"},
+                                        "assigned_agent": {"type": "string"},
+                                        "dependencies": {
+                                            "type": "array",
+                                            "items": {"type": "string"}
+                                        },
+                                        "input_artifact_keys": {
+                                            "type": "array",
+                                            "items": {"type": "string"}
+                                        },
+                                        "output_artifact_keys": {
+                                            "type": "array", 
+                                            "items": {"type": "string"}
+                                        }
+                                    },
+                                    "required": ["task_id", "goal", "assigned_agent"]
+                                }
+                            }
+                        },
+                        "required": ["nodes"]
+                    }
+                },
+                "required": ["response_to_user", "updated_task_graph"]
+            }
+
+            self.report_progress("Generating refinement", "Invoking LLM for plan modification")
+            
+            try:
+                prompt = self._build_prompt(current_plan_json, user_feedback)
+                
+                # Use regular invoke by default, fall back to function calling if needed
+                logger.debug("Using regular invoke method (primary approach)")
+                llm_response_str = self.llm_client.invoke(prompt)
+                
+                # Check if the response is valid JSON with actual content
+                try:
+                    test_parse = json.loads(llm_response_str)
+                    if not isinstance(test_parse, dict) or not test_parse.get('updated_task_graph'):
+                        raise ValueError("Invalid or empty response")
+                    logger.debug("Regular invoke succeeded with valid JSON response")
+                except (json.JSONDecodeError, ValueError) as e:
+                    logger.warning(f"Regular invoke failed to produce valid JSON ({e}), trying function calling")
+                    if hasattr(self.llm_client, 'invoke_with_schema'):
+                        try:
+                            llm_response_str = self.llm_client.invoke_with_schema(prompt, refinement_schema)
+                            logger.debug("Function calling fallback succeeded")
+                        except Exception as fallback_error:
+                            logger.error(f"Function calling fallback also failed: {fallback_error}")
+                            # Keep the original response from regular invoke for error reporting
+                            pass
+                    else:
+                        logger.warning("Function calling not available, keeping original response")
+                
+                refinement_data = json.loads(llm_response_str)
+
+                response_to_user = refinement_data.get("response_to_user")
+                updated_graph_data = refinement_data.get("updated_task_graph")
+
+                if not response_to_user or not updated_graph_data:
+                    raise ValueError("LLM response is missing required keys.")
+
+                self.report_progress("Updating task graph", "Validating and applying changes")
+                
+                # Validate and update the task graph in the context.
+                new_task_graph = TaskGraph(**updated_graph_data)
+                global_context.task_graph = new_task_graph
+
+                self.report_progress("Refinement completed", f"Successfully updated plan based on feedback")
+                
+                return self.create_result(
+                    success=True,
+                    message=response_to_user,
+                    outputs={
+                        "refinement_applied": True,
+                        "updated_nodes_count": len(new_task_graph.nodes),
+                        "response_to_user": response_to_user
+                    }
+                )
+
+            except (json.JSONDecodeError, ValidationError, ValueError) as e:
+                error_msg = f"Failed to process refinement. The LLM may have returned an invalid structure. Error: {e}"
+                logger.error(error_msg)
+                self.fail_step(error_msg, ["Check LLM response format", "Verify task graph structure"])
+                return self.create_result(
+                    success=False,
+                    message=error_msg,
+                    error_details={"exception": str(e), "type": "parsing_error"}
+                )
+                
+        except Exception as e:
+            error_msg = f"Unexpected error during plan refinement: {e}"
+            logger.error(error_msg, exc_info=True)
+            self.fail_step(error_msg)
+            return self.create_result(
+                success=False,
+                message=error_msg,
+                error_details={"exception": str(e), "type": "unexpected_error"}
+            )
 
     def _build_prompt(self, current_plan: Dict, user_feedback: str) -> str:
         """Constructs a prompt to guide the LLM in refining a plan."""
@@ -67,109 +221,6 @@ class PlanRefinementAgent(BaseAgent):
         Now, process the user's feedback.
         """
 
-    def execute(self, goal: str, context: GlobalContext, current_task: TaskNode) -> AgentResponse:
-        # The 'goal' for this agent is the user's refinement feedback.
-        user_feedback = goal
-        logger.info(f"PlanRefinementAgent executing with feedback: '{user_feedback}'")
-
-        # Get the current plan from the context.
-        current_plan_json = context.task_graph.model_dump(mode='json')
-        if not current_plan_json.get("nodes"):
-            return AgentResponse(success=False, message="No active plan to refine.")
-
-        # Define JSON schema for guaranteed structured response
-        refinement_schema = {
-            "type": "object",
-            "properties": {
-                "response_to_user": {
-                    "type": "string",
-                    "description": "Natural language response to the user's feedback"
-                },
-                "updated_task_graph": {
-                    "type": "object",
-                    "properties": {
-                        "nodes": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "object",
-                                "properties": {
-                                    "task_id": {"type": "string"},
-                                    "goal": {"type": "string"},
-                                    "assigned_agent": {"type": "string"},
-                                    "dependencies": {
-                                        "type": "array",
-                                        "items": {"type": "string"}
-                                    },
-                                    "input_artifact_keys": {
-                                        "type": "array",
-                                        "items": {"type": "string"}
-                                    },
-                                    "output_artifact_keys": {
-                                        "type": "array", 
-                                        "items": {"type": "string"}
-                                    }
-                                },
-                                "required": ["task_id", "goal", "assigned_agent"]
-                            }
-                        }
-                    },
-                    "required": ["nodes"]
-                }
-            },
-            "required": ["response_to_user", "updated_task_graph"]
-        }
-
-        try:
-            prompt = self._build_prompt(current_plan_json, user_feedback)
-            
-            # Use regular invoke by default, fall back to function calling if needed
-            logger.debug("Using regular invoke method (primary approach)")
-            llm_response_str = self.llm_client.invoke(prompt)
-            
-            # Check if the response is valid JSON with actual content
-            try:
-                test_parse = json.loads(llm_response_str)
-                if not isinstance(test_parse, dict) or not test_parse.get('updated_task_graph'):
-                    raise ValueError("Invalid or empty response")
-                logger.debug("Regular invoke succeeded with valid JSON response")
-            except (json.JSONDecodeError, ValueError) as e:
-                logger.warning(f"Regular invoke failed to produce valid JSON ({e}), trying function calling")
-                if hasattr(self.llm_client, 'invoke_with_schema'):
-                    try:
-                        llm_response_str = self.llm_client.invoke_with_schema(prompt, refinement_schema)
-                        logger.debug("Function calling fallback succeeded")
-                    except Exception as fallback_error:
-                        logger.error(f"Function calling fallback also failed: {fallback_error}")
-                        # Keep the original response from regular invoke for error reporting
-                        pass
-                else:
-                    logger.warning("Function calling not available, keeping original response")
-            
-            refinement_data = json.loads(llm_response_str)
-
-            response_to_user = refinement_data.get("response_to_user")
-            updated_graph_data = refinement_data.get("updated_task_graph")
-
-            if not response_to_user or not updated_graph_data:
-                raise ValueError("LLM response is missing required keys.")
-
-            # Validate and update the task graph in the context.
-            new_task_graph = TaskGraph(**updated_graph_data)
-            context.task_graph = new_task_graph
-
-            return AgentResponse(success=True, message=response_to_user)
-
-        except (json.JSONDecodeError, ValidationError, ValueError) as e:
-            msg = f"Failed to process refinement. The LLM may have returned an invalid structure. Error: {e}"
-            logger.error(msg)
-            return AgentResponse(success=False, message=msg)
-        except Exception as e:
-            msg = f"An unexpected error occurred during plan refinement: {e}"
-            logger.critical(msg, exc_info=True)
-            return AgentResponse(success=False, message=msg)
-
-
-# --- Self-Testing Block ---
 if __name__ == "__main__":
     import unittest
     from unittest.mock import MagicMock

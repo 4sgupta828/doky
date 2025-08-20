@@ -1215,21 +1215,3 @@ We use [Semantic Versioning](https://semver.org/):
         """Get current date in YYYY-MM-DD format."""
         from datetime import datetime
         return datetime.now().strftime("%Y-%m-%d")
-
-    # Legacy execute method for backward compatibility
-    def execute(self, goal: str, context: GlobalContext, current_task: TaskNode) -> AgentResponse:
-        """Legacy execute method - converts to new interface."""
-        inputs = {
-            'operation': 'generate',
-            'documentation_type': 'readme',
-            'working_directory': str(context.workspace_path),
-            'include_examples': True
-        }
-        
-        result = self.execute_v2(goal, inputs, context)
-        
-        return AgentResponse(
-            success=result.success,
-            message=result.message,
-            artifacts_generated=[]
-        )

@@ -538,19 +538,3 @@ class DependencyModifierAgent(BaseAgent):
                 "message": f"Dependency check error: {e}",
                 "outputs": {"error": str(e)}
             }
-
-    # Legacy execute method for backward compatibility
-    def execute(self, goal: str, context: GlobalContext, current_task: TaskNode) -> AgentResponse:
-        """Legacy execute method - converts to new interface."""
-        inputs = {
-            'operation': 'list',  # Default operation
-            'working_directory': str(context.workspace_path)
-        }
-        
-        result = self.execute_v2(goal, inputs, context)
-        
-        return AgentResponse(
-            success=result.success,
-            message=result.message,
-            artifacts_generated=[]
-        )

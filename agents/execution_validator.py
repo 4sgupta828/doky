@@ -35,46 +35,6 @@ class ExecutionValidatorAgent(BaseAgent):
     def optional_inputs(self) -> List[str]:
         return ["test_script", "output_directory", "timeout_seconds"]
     
-    def execute(self, goal: str, context: GlobalContext, current_task: TaskNode) -> AgentResponse:
-        """Legacy execute method - tries to infer inputs from context."""
-        # Try to get code files from workspace
-        code_files = {}
-        test_script = None
-        
-        try:
-            workspace_files = context.workspace.list_files()
-            for file_path in workspace_files:
-                if file_path.endswith('.py'):
-                    content = context.workspace.get_file_content(file_path)
-                    if content:
-                        if 'test' in file_path.lower():
-                            test_script = file_path
-                        code_files[file_path] = content
-        except:
-            pass
-        
-        if not code_files:
-            return AgentResponse(
-                success=False,
-                message="No Python code files found to validate"
-            )
-        
-        inputs = {
-            'code_files': code_files,
-            'output_directory': context.workspace_path
-        }
-        
-        if test_script:
-            inputs['test_script'] = test_script
-        
-        result = self.execute_v2(goal, inputs, context)
-        
-        return AgentResponse(
-            success=result.success,
-            message=result.message,
-            artifacts_generated=[]
-        )
-    
     def execute_v2(self, goal: str, inputs: Dict[str, Any], global_context: GlobalContext) -> AgentResult:
         """Execute validation tests for the generated code."""
         self.validate_inputs(inputs)

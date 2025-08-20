@@ -192,19 +192,3 @@ class TestRunnerAgent(BaseAgent):
                 return f"Test suite failed: {failed}/{total} tests failed using {framework} ({files_count} files)"
             else:
                 return f"Test execution failed using {framework}: {analysis_result.get('summary', 'Tests failed')}"
-
-    # Legacy execute method for backward compatibility
-    def execute(self, goal: str, context: GlobalContext, _current_task: TaskNode) -> AgentResponse:
-        """Legacy execute method for backward compatibility."""
-        inputs = {
-            "test_target": str(context.workspace_path),
-            "working_directory": str(context.workspace_path)
-        }
-        
-        result = self.execute_v2(goal, inputs, context)
-        
-        return AgentResponse(
-            success=result.success,
-            message=result.message,
-            artifacts_generated=[]
-        )

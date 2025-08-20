@@ -730,20 +730,3 @@ class ProblemAnalysisAgent(BaseAgent):
                         module = Path(file_path).stem
                         modules.add(module)
         return list(modules)
-
-    # Legacy execute method for backward compatibility
-    def execute(self, goal: str, context: GlobalContext, current_task: TaskNode) -> AgentResponse:
-        """Legacy execute method - converts to new interface."""
-        inputs = {
-            'problem_data': goal,
-            'analysis_depth': 'standard',
-            'include_suggestions': True
-        }
-        
-        result = self.execute_v2(goal, inputs, context)
-        
-        return AgentResponse(
-            success=result.success,
-            message=result.message,
-            artifacts_generated=[]
-        )
