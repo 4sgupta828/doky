@@ -67,3 +67,15 @@ class FoundationalAgent(ABC):
         if error:
             error_msg += f" - {str(error)}"
         self.logger.error(error_msg)
+    
+    def report_intermediate_output(self, output_type: str, data: Any) -> None:
+        """Report intermediate output during processing."""
+        self.logger.info(f"[{self.name}] {output_type}: {type(data).__name__} output generated")
+        
+    def create_result(self, success: bool, message: str, outputs: Dict[str, Any] = None) -> AgentResult:
+        """Create a standardized AgentResult."""
+        return AgentResult(
+            success=success,
+            message=message,
+            outputs=outputs or {}
+        )

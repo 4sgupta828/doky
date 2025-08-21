@@ -483,7 +483,22 @@ class CreatorAgent(FoundationalAgent):
         """Check if this agent supports the given goal."""
         creation_keywords = [
             "create", "generate", "write", "build", "implement", "develop",
-            "code", "test", "documentation", "spec", "manifest", "project"
+            "test", "documentation", "spec", "manifest", "project"
         ]
+        
+        # Check for creation-specific patterns
+        creation_patterns = [
+            "create code", "write code", "generate code", "implement code",
+            "build code", "develop code", "code generation"
+        ]
+        
         goal_lower = goal.lower()
-        return any(keyword in goal_lower for keyword in creation_keywords)
+        
+        # Exclude debugging and analysis goals
+        exclusion_keywords = ["debug", "analyze", "fix", "diagnose", "troubleshoot"]
+        if any(exclusion in goal_lower for exclusion in exclusion_keywords):
+            return False
+        
+        # Check for creation keywords or specific code creation patterns
+        return (any(keyword in goal_lower for keyword in creation_keywords) or
+                any(pattern in goal_lower for pattern in creation_patterns))
