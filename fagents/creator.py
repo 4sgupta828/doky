@@ -226,11 +226,26 @@ class CreatorAgent(FoundationalAgent):
         
         if result.success:
             self.report_intermediate_output("generated_code", result.generated_files)
+            
+            # Write the generated code to the workspace (ported from CoderAgent)
+            written_files = []
+            for file_path, code_content in result.generated_files.items():
+                if not isinstance(code_content, str) or not code_content.strip():
+                    logger.warning(f"Skipping empty or invalid code for file '{file_path}'")
+                    continue
+                
+                global_context.workspace.write_file_content(file_path, code_content, "CreatorAgent_code_generation")
+                written_files.append(file_path)
+            
+            if not written_files:
+                return AgentResult(success=False, message="Code generated but no valid files were written.")
+            
             return AgentResult(
                 success=True,
-                message="Successfully generated code",
+                message=f"Successfully generated and wrote {len(written_files)} code files",
                 outputs={
                     "generated_code": result.generated_files,
+                    "artifacts_generated": written_files,
                     "file_structure": result.file_structure,
                     "dependencies": result.dependencies,
                     "quality_metrics": result.quality_metrics
@@ -277,11 +292,26 @@ class CreatorAgent(FoundationalAgent):
         
         if result.success:
             self.report_intermediate_output("generated_tests", result.generated_tests)
+            
+            # Write the generated tests to the workspace (ported from CoderAgent)
+            written_files = []
+            for file_path, test_content in result.generated_tests.items():
+                if not isinstance(test_content, str) or not test_content.strip():
+                    logger.warning(f"Skipping empty or invalid test file '{file_path}'")
+                    continue
+                
+                global_context.workspace.write_file_content(file_path, test_content, "CreatorAgent_test_generation")
+                written_files.append(file_path)
+            
+            if not written_files:
+                return AgentResult(success=False, message="Tests generated but no valid files were written.")
+            
             return AgentResult(
                 success=True,
-                message="Successfully generated tests",
+                message=f"Successfully generated and wrote {len(written_files)} test files",
                 outputs={
                     "generated_tests": result.generated_tests,
+                    "artifacts_generated": written_files,
                     "test_structure": result.test_structure,
                     "coverage_mapping": result.coverage_mapping,
                     "test_count": result.test_count
