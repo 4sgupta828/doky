@@ -22,18 +22,18 @@ from core.context import GlobalContext
 from core.models import AgentResult
 
 # Import all surgical tools
-from tools.surgical.script_execution_tools import (
+from tools.script_execution_tools import (
     execute_script, execute_instruction, ScriptExecutionContext, 
     InstructionScript, ScriptInstruction, parse_script_from_json,
     parse_script_from_dict, create_fix_code_instruction, create_command_instruction,
     ModificationType, PriorityLevel, CodeTarget, ValidationSpec
 )
-from tools.surgical.requirements_management_tools import (
+from tools.requirements_management_tools import (
     analyze_dependencies, RequirementsAnalysisContext, DependencyType,
     RequirementsFormat, update_requirements_file, detect_requirements_format,
     generate_requirements_for_format, validate_requirements_file
 )
-from tools.surgical.configuration_management_tools import (
+from tools.configuration_management_tools import (
     create_configuration, update_configuration, read_configuration,
     ConfigFormat, ConfigOperation, MergeStrategy, ConfigOperationContext,
     ConfigOperationResult, backup_config, restore_config, validate_config_syntax

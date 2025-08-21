@@ -9,12 +9,12 @@ from core.context import GlobalContext
 from core.models import AgentResult, TaskGraph
 
 # Planning tools - atomic and reusable
-from tools.planning.task_planning_tools import (
+from tools.task_planning_tools import (
     analyze_user_intent, generate_task_graph, refine_task_graph,
     PlanningContext, PlanningQuality, WorkflowType, 
     estimate_workflow_duration, identify_critical_path
 )
-from tools.planning.workflow_orchestration_tools import (
+from tools.workflow_orchestration_tools import (
     orchestrate_workflow, create_orchestration_context,
     optimize_workflow_execution, monitor_workflow_progress,
     OrchestrationMode, OrchestrationResult

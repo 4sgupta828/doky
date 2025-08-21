@@ -11,12 +11,12 @@ from core.models import AgentResult
 # Analysis tools - atomic and reusable
 from tools.code_validator import validate_code_comprehensive
 from tools.environment_tools import EnvironmentTools
-from tools.analysis.problem_analysis_tools import (
+from tools.problem_analysis_tools import (
     classify_problem, analyze_errors, assess_severity, 
     analyze_root_causes, recognize_error_patterns, 
     generate_problem_recommendations
 )
-from tools.analysis.quality_analysis_tools import (
+from tools.quality_analysis_tools import (
     analyze_code_quality, scan_for_security_patterns
 )
 
