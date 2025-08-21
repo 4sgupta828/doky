@@ -20,6 +20,9 @@ from tools.quality_analysis_tools import (
     analyze_code_quality, scan_for_security_patterns
 )
 
+# LLM-based routing
+from .routing import LLMRouter, create_routing_context, RoutingDecision
+
 # Get a logger instance for this module
 logger = logging.getLogger(__name__)
 
@@ -44,11 +47,13 @@ class AnalystAgent(FoundationalAgent):
     Unique Value: Can understand and diagnose ANY existing artifact or problem state
     """
     
-    def __init__(self):
+    def __init__(self, llm_client: Any = None):
         super().__init__(
             name="AnalystAgent",
             description="Deep comprehension and diagnosis agent that can analyze code, environments, problems, and quality."
         )
+        self._llm_client = llm_client
+        self.router = LLMRouter(llm_client)
     
     def execute(self, goal: str, inputs: Dict[str, Any], global_context: GlobalContext) -> AgentResult:
         """
@@ -64,9 +69,22 @@ class AnalystAgent(FoundationalAgent):
         self.report_progress("Starting analysis", f"Goal: {goal}")
         
         try:
-            # Determine analysis type from goal and inputs
-            analysis_type = self._determine_analysis_type(goal, inputs)
-            self.report_progress("Analysis type determined", analysis_type)
+            # Use LLM-based routing to determine analysis type
+            workspace_files = global_context.workspace.list_files() if global_context.workspace else []
+            routing_context = create_routing_context(
+                agent_type="AnalystAgent",
+                goal=goal,
+                inputs=inputs,
+                workspace_files=workspace_files,
+                available_capabilities=list(self.get_capabilities().get("analysis_modes", []))
+            )
+            
+            routing_result = self.router.route_request(routing_context)
+            analysis_type = routing_result.decision.value
+            
+            self.report_progress("Analysis type determined via LLM routing", 
+                               f"{analysis_type} (confidence: {routing_result.confidence:.2f})")
+            logger.info(f"LLM routing reasoning: {routing_result.reasoning}")
             
             # Execute the appropriate analysis
             if analysis_type == "code_analysis":

@@ -41,6 +41,9 @@ from tools.manifest_generation_tools import (
     generate_manifest, ManifestContext, ProjectType, ProjectStructure
 )
 
+# LLM-based routing
+from .routing import LLMRouter, create_routing_context, RoutingDecision
+
 logger = logging.getLogger(__name__)
 
 class CreationType(Enum):
@@ -71,6 +74,7 @@ class CreatorAgent(FoundationalAgent):
             description="Foundational agent for generating code, tests, documentation, specifications, and project structures"
         )
         self.llm_client = llm_client
+        self.router = LLMRouter(llm_client)
 
     def get_capabilities(self) -> List[str]:
         """Return list of creation capabilities."""
@@ -98,8 +102,33 @@ class CreatorAgent(FoundationalAgent):
         self.report_progress("Starting creation task", goal)
         
         try:
-            # Determine creation type from goal and inputs
-            creation_type = self._determine_creation_type(goal, inputs)
+            # Use LLM-based routing to determine creation type
+            workspace_files = global_context.workspace.list_files() if global_context.workspace else []
+            routing_context = create_routing_context(
+                agent_type="CreatorAgent",
+                goal=goal,
+                inputs=inputs,
+                workspace_files=workspace_files,
+                available_capabilities=self.get_capabilities()
+            )
+            
+            routing_result = self.router.route_request(routing_context)
+            
+            # Map routing decision to CreationType
+            creation_type_mapping = {
+                RoutingDecision.CODE_CREATION: CreationType.CODE,
+                RoutingDecision.TEST_CREATION: CreationType.TESTS,
+                RoutingDecision.DOCUMENTATION_CREATION: CreationType.DOCUMENTATION,
+                RoutingDecision.SPECIFICATION_CREATION: CreationType.SPECIFICATION,
+                RoutingDecision.MANIFEST_CREATION: CreationType.MANIFEST,
+                RoutingDecision.FULL_PROJECT_CREATION: CreationType.FULL_PROJECT,
+            }
+            
+            creation_type = creation_type_mapping.get(routing_result.decision, CreationType.CODE)
+            
+            self.report_progress("Creation type determined via LLM routing", 
+                               f"{creation_type.value} (confidence: {routing_result.confidence:.2f})")
+            logger.info(f"LLM routing reasoning: {routing_result.reasoning}")
             
             if creation_type == CreationType.CODE:
                 return self._handle_code_generation(goal, inputs, global_context)

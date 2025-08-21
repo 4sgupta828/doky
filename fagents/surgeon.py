@@ -39,6 +39,9 @@ from tools.configuration_management_tools import (
     ConfigOperationResult, backup_config, restore_config, validate_config_syntax
 )
 
+# LLM-based routing
+from .routing import LLMRouter, create_routing_context, RoutingDecision
+
 logger = logging.getLogger(__name__)
 
 class SurgicalOperation(Enum):
@@ -69,6 +72,7 @@ class SurgeonAgent(FoundationalAgent):
             description="Foundational agent for precise modifications, surgical operations, and system maintenance"
         )
         self.llm_client = llm_client
+        self.router = LLMRouter(llm_client)
 
     def get_capabilities(self) -> List[str]:
         """Return list of surgical capabilities."""
@@ -97,8 +101,33 @@ class SurgeonAgent(FoundationalAgent):
         self.report_progress("Starting surgical operation", goal)
         
         try:
-            # Determine operation type from goal and inputs
-            operation_type = self._determine_operation_type(goal, inputs)
+            # Use LLM-based routing to determine operation type
+            workspace_files = global_context.workspace.list_files() if global_context.workspace else []
+            routing_context = create_routing_context(
+                agent_type="SurgeonAgent",
+                goal=goal,
+                inputs=inputs,
+                workspace_files=workspace_files,
+                available_capabilities=self.get_capabilities()
+            )
+            
+            routing_result = self.router.route_request(routing_context)
+            
+            # Map routing decision to SurgicalOperation
+            operation_mapping = {
+                RoutingDecision.SCRIPT_EXECUTION: SurgicalOperation.SCRIPT_EXECUTION,
+                RoutingDecision.CODE_MODIFICATION: SurgicalOperation.CODE_MODIFICATION,
+                RoutingDecision.REQUIREMENTS_MANAGEMENT: SurgicalOperation.REQUIREMENTS_MANAGEMENT,
+                RoutingDecision.CONFIGURATION_MANAGEMENT: SurgicalOperation.CONFIGURATION_MANAGEMENT,
+                RoutingDecision.DEPENDENCY_UPDATE: SurgicalOperation.DEPENDENCY_UPDATE,
+                RoutingDecision.PRECISE_REPAIR: SurgicalOperation.PRECISE_REPAIR,
+            }
+            
+            operation_type = operation_mapping.get(routing_result.decision, SurgicalOperation.CODE_MODIFICATION)
+            
+            self.report_progress("Surgical operation determined via LLM routing", 
+                               f"{operation_type.value} (confidence: {routing_result.confidence:.2f})")
+            logger.info(f"LLM routing reasoning: {routing_result.reasoning}")
             
             if operation_type == SurgicalOperation.SCRIPT_EXECUTION:
                 return self._handle_script_execution(goal, inputs, global_context)

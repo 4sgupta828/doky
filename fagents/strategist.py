@@ -21,6 +21,9 @@ from tools.workflow_orchestration_tools import (
     OrchestrationMode, OrchestrationResult
 )
 
+# LLM-based routing
+from .routing import LLMRouter, create_routing_context, RoutingDecision
+
 # Get a logger instance for this module
 logger = logging.getLogger(__name__)
 
@@ -52,6 +55,7 @@ class StrategistAgent(FoundationalAgent):
         )
         self.agent_registry = agent_registry or {}
         self._llm_client = llm_client
+        self.router = LLMRouter(llm_client)
     
     def execute(self, goal: str, inputs: Dict[str, Any], global_context: GlobalContext) -> AgentResult:
         """
@@ -67,9 +71,22 @@ class StrategistAgent(FoundationalAgent):
         self.report_progress("Starting strategic planning", f"Goal: {goal}")
         
         try:
-            # Determine strategy type from goal and inputs
-            strategy_type = self._determine_strategy_type(goal, inputs)
-            self.report_progress("Strategy type determined", strategy_type)
+            # Use LLM-based routing to determine strategy type
+            workspace_files = global_context.workspace.list_files() if global_context.workspace else []
+            routing_context = create_routing_context(
+                agent_type="StrategistAgent",
+                goal=goal,
+                inputs=inputs,
+                workspace_files=workspace_files,
+                available_capabilities=list(self.get_capabilities().get("strategy_modes", []))
+            )
+            
+            routing_result = self.router.route_request(routing_context)
+            strategy_type = routing_result.decision.value
+            
+            self.report_progress("Strategy type determined via LLM routing", 
+                               f"{strategy_type} (confidence: {routing_result.confidence:.2f})")
+            logger.info(f"LLM routing reasoning: {routing_result.reasoning}")
             
             # Execute the appropriate strategy
             if strategy_type == "task_planning":

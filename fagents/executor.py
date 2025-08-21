@@ -19,6 +19,9 @@ from tools.file_system_tools import read_file, write_file, discover_files, creat
 from tools.environment_tools import EnvironmentTools
 from tools.shell import execute_shell_command
 
+# LLM-based routing
+from .routing import LLMRouter, create_routing_context, RoutingDecision
+
 logger = logging.getLogger(__name__)
 
 
@@ -112,11 +115,13 @@ class ExecutorAgent(FoundationalAgent):
     from the original agents directory.
     """
 
-    def __init__(self):
+    def __init__(self, llm_client: Any = None):
         super().__init__(
             name="ExecutorAgent",
             description="Foundational agent for execution operations: tests, builds, file management, environment setup, and validation"
         )
+        self._llm_client = llm_client
+        self.router = LLMRouter(llm_client)
 
     def get_capabilities(self) -> Dict[str, str]:
         """Return the capabilities of this foundational agent."""
@@ -144,19 +149,34 @@ class ExecutorAgent(FoundationalAgent):
         logger.info(f"ExecutorAgent executing: '{goal}'")
         
         try:
-            # Route to appropriate execution handler based on goal
-            if "test" in goal.lower():
-                return self._handle_test_execution(goal, inputs, global_context)
-            elif "validate" in goal.lower():
-                return self._handle_code_validation(goal, inputs, global_context)
-            elif "command" in goal.lower() or "build" in goal.lower() or "deploy" in goal.lower():
-                return self._handle_shell_execution(goal, inputs, global_context)
-            elif "file" in goal.lower() or "directory" in goal.lower():
-                return self._handle_file_operations(goal, inputs, global_context)
-            elif "environment" in goal.lower() or "dependency" in goal.lower() or "package" in goal.lower():
-                return self._handle_environment_setup(goal, inputs, global_context)
+            # Use LLM-based routing to determine execution type
+            workspace_files = global_context.workspace.list_files() if global_context.workspace else []
+            routing_context = create_routing_context(
+                agent_type="ExecutorAgent",
+                goal=goal,
+                inputs=inputs,
+                workspace_files=workspace_files,
+                available_capabilities=list(self.get_capabilities().keys())
+            )
+            
+            routing_result = self.router.route_request(routing_context)
+            
+            # Map routing decision to handler
+            operation_mapping = {
+                RoutingDecision.TEST_EXECUTION: self._handle_test_execution,
+                RoutingDecision.CODE_VALIDATION: self._handle_code_validation,
+                RoutingDecision.SHELL_EXECUTION: self._handle_shell_execution,
+                RoutingDecision.FILE_OPERATIONS: self._handle_file_operations,
+                RoutingDecision.ENVIRONMENT_SETUP: self._handle_environment_setup,
+            }
+            
+            handler = operation_mapping.get(routing_result.decision)
+            if handler:
+                logger.info(f"LLM routing: {routing_result.decision.value} (confidence: {routing_result.confidence:.2f})")
+                logger.info(f"LLM routing reasoning: {routing_result.reasoning}")
+                return handler(goal, inputs, global_context)
             else:
-                # Default to intelligent routing based on inputs
+                # Fallback to intelligent routing
                 return self._handle_intelligent_routing(goal, inputs, global_context)
 
         except Exception as e:
