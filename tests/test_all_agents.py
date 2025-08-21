@@ -17,7 +17,7 @@ from agents import AGENT_REGISTRY, BaseAgent, get_agent
 from core.context import GlobalContext
 from core.models import TaskNode, AgentResponse
 from utils.logger import setup_logger
-from real_llm_client import create_llm_client
+from tools.llm_tool import create_llm_client
 
 # Configure logging for the test
 setup_logger(default_level=logging.INFO)

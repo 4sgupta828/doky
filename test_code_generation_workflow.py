@@ -28,7 +28,7 @@ from agents.cli_test_generator import CLITestGeneratorAgent
 from agents.execution_validator import ExecutionValidatorAgent
 from core.context import GlobalContext
 from core.models import TaskNode
-from real_llm_client import create_llm_client
+from tools.llm_tool import create_llm_client
 from utils.logger import setup_logger
 
 def test_code_generation_workflow():

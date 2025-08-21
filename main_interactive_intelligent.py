@@ -407,21 +407,22 @@ def main(args: List[str]) -> None:
     llm_client = None
     
     try:
-        from llm_client import LLMClientFactory, get_llm_status
+        from tools.llm_tool import create_llm_client
         
         if parsed_args.llm_client:
             # Custom LLM client configuration
             logger.info(f"Using custom LLM client configuration: {parsed_args.llm_client}")
             # This would initialize your specific LLM client based on config
-            llm_client = LLMClientFactory.create_client("openai")
+            llm_client = create_llm_client(provider="openai")
             
         elif hasattr(parsed_args, 'development_mode') and parsed_args.development_mode:
             # Development mode: try real LLM, fallback to mock
-            llm_client = LLMClientFactory.create_development_client()
+            llm_client = create_llm_client()
             
         elif hasattr(parsed_args, 'use_mock') and parsed_args.use_mock:
             # Explicitly requested mock LLM
-            llm_client = LLMClientFactory.create_client("mock", enable_logging=not parsed_args.quiet_logs)
+            # Mock mode not supported in new client - use None
+            llm_client = None
             logger.info("Using mock LLM client for testing")
             
         elif hasattr(parsed_args, 'no_llm') and parsed_args.no_llm:
@@ -432,35 +433,12 @@ def main(args: List[str]) -> None:
         else:
             # Production mode: require real LLM, fail fast if not available
             try:
-                llm_client = LLMClientFactory.create_production_client()
+                llm_client = create_llm_client()
                 logger.info("Using OpenAI LLM client for intelligent routing")
                 
             except Exception as production_error:
-                # Check LLM status for helpful error message
-                status = get_llm_status()
-                
-                error_msg = "❌ PRODUCTION LLM CLIENT REQUIRED BUT NOT AVAILABLE\n\n"
-                error_msg += f"Error: {production_error}\n\n"
-                error_msg += "Required for production:\n"
-                error_msg += f"✓ OpenAI package installed: {status['openai_package_installed']}\n"
-                error_msg += f"✓ OPENAI_API_KEY available: {status['openai_key_available']}\n"
-                error_msg += f"✓ .env file exists: {status['env_file_exists']}\n"
-                error_msg += f"✓ Can create client: {status['can_create_client']}\n"
-                
-                if not status['openai_package_installed']:
-                    error_msg += "\n💡 Fix: pip install openai"
-                elif not status['openai_key_available']:
-                    error_msg += "\n💡 Fix: Set OPENAI_API_KEY in environment or create .env file"
-                    error_msg += "\n    Example .env file:"
-                    error_msg += "\n    OPENAI_API_KEY=sk-your-key-here"
-                
-                error_msg += "\n\n🔧 Alternative options:"
-                error_msg += "\n  • Development mode: python main_interactive_intelligent.py --development-mode"
-                error_msg += "\n  • Mock testing: python main_interactive_intelligent.py --use-mock"
-                error_msg += "\n  • Fallback only: python main_interactive_intelligent.py --no-llm"
-                
+                error_msg = f"❌ LLM client initialization failed: {production_error}"
                 logger.critical(error_msg)
-                print(f"\n{Style.Fg.ERROR}{error_msg}{Style.RESET}")
                 sys.exit(1)
                 
     except ImportError as e:

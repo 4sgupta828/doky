@@ -24,7 +24,7 @@ sys.path.insert(0, str(project_root))
 
 from agents.enhanced_code_generator import EnhancedCodeGeneratorAgent
 from core.context import GlobalContext
-from real_llm_client import create_llm_client
+from tools.llm_tool import create_llm_client
 from utils.logger import setup_logger
 
 def test_enhanced_code_generation():

@@ -35,7 +35,7 @@ class Orchestrator:
             self.global_context = GlobalContext(workspace_path=workspace_path)
 
         # Initialize real LLM client
-        from real_llm_client import create_llm_client
+        from tools.llm_tool import create_llm_client
         self.llm_client = create_llm_client()
         logging.info(f"Initialized LLM client: {self.llm_client.provider} with model {self.llm_client.model}")
         

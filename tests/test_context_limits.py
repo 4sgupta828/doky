@@ -10,7 +10,7 @@ from pathlib import Path
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from real_llm_client import RealLLMClient, ContextTooLargeError
+from tools.llm_tool import RealLLMClient, ContextTooLargeError
 
 def test_context_limits():
     """Test that context limits work as expected."""
