@@ -227,7 +227,10 @@ class InterAgentRouter:
         """Determine which agent to invoke next using LLM reasoning."""
         
         if not self.llm_client:
-            return self._fallback_next_agent(workflow_context)
+            raise RuntimeError(
+                "LLM client is required for inter-agent routing decisions. "
+                "No fallback routing available - please ensure OpenAI LLM Tool is properly configured."
+            )
         
         try:
             # Build context for LLM decision
@@ -241,8 +244,8 @@ class InterAgentRouter:
             return self._parse_next_agent_decision(response_data, workflow_context)
             
         except Exception as e:
-            logger.warning(f"LLM-based next agent decision failed: {e}. Using fallback.")
-            return self._fallback_next_agent(workflow_context)
+            logger.error(f"LLM-based next agent decision failed: {e}")
+            raise RuntimeError(f"Inter-agent routing failed: {e}. No fallback available - please check LLM configuration.")
     
     def _build_next_agent_prompt(self, workflow_context: WorkflowContext, 
                                 global_context: GlobalContext) -> str:
@@ -421,87 +424,6 @@ class InterAgentRouter:
             completion_summary=response_data.get("completion_summary", "")
         )
     
-    def _fallback_next_agent(self, workflow_context: WorkflowContext) -> NextAgentDecision:
-        """Provide fallback routing when LLM is unavailable."""
-        
-        # Simple rule-based fallback logic
-        last_execution = workflow_context.execution_history[-1] if workflow_context.execution_history else None
-        
-        if not last_execution:
-            # Start with AnalystAgent
-            return NextAgentDecision(
-                agent_name="AnalystAgent",
-                confidence=0.8,
-                reasoning="Starting workflow with analysis (fallback)",
-                recommended_inputs=workflow_context.initial_inputs,
-                goal_for_agent=f"Analyze: {workflow_context.user_goal}"
-            )
-        
-        last_agent = last_execution.agent_name
-        user_goal_lower = workflow_context.user_goal.lower()
-        hop_count = len(workflow_context.execution_history)
-        
-        # Simple progression logic based on typical workflow patterns
-        if hop_count == 1 and last_agent == "AnalystAgent":
-            # Always move from analysis to appropriate next step
-            if any(word in user_goal_lower for word in ["create", "build", "generate", "implement", "write", "develop"]):
-                return NextAgentDecision(
-                    agent_name="CreatorAgent",
-                    confidence=0.8,
-                    reasoning="Moving from analysis to creation (fallback)",
-                    recommended_inputs=last_execution.result.outputs or {},
-                    goal_for_agent=f"Create based on analysis: {workflow_context.user_goal}"
-                )
-            elif any(word in user_goal_lower for word in ["test", "validate", "run", "execute", "check"]):
-                return NextAgentDecision(
-                    agent_name="ExecutorAgent", 
-                    confidence=0.8,
-                    reasoning="Moving from analysis to execution (fallback)",
-                    recommended_inputs=last_execution.result.outputs or {},
-                    goal_for_agent=f"Execute/validate: {workflow_context.user_goal}"
-                )
-            else:
-                # For analysis-only goals, validate completion
-                return NextAgentDecision(
-                    agent_name="AnalystAgent",
-                    confidence=0.8,
-                    reasoning="Analysis goal - validating completion (fallback)",
-                    recommended_inputs=last_execution.result.outputs or {},
-                    goal_for_agent=f"Validate completion of: {workflow_context.user_goal}",
-                    is_completion=True,
-                    completion_summary="Analysis completed"
-                )
-        
-        elif last_agent == "CreatorAgent":
-            return NextAgentDecision(
-                agent_name="ExecutorAgent",
-                confidence=0.7,
-                reasoning="Moving from creation to validation (fallback)",
-                recommended_inputs=last_execution.result.outputs or {},
-                goal_for_agent=f"Validate created content: {workflow_context.user_goal}"
-            )
-        
-        elif last_agent == "ExecutorAgent":
-            if last_execution.result.success:
-                # Validation with AnalystAgent
-                return NextAgentDecision(
-                    agent_name="AnalystAgent",
-                    confidence=0.8,
-                    reasoning="Final validation of completed work (fallback)",
-                    recommended_inputs=workflow_context.accumulated_outputs,
-                    goal_for_agent=f"Validate completion of: {workflow_context.user_goal}",
-                    is_completion=True,
-                    completion_summary="Work completed, validating results"
-                )
-        
-        # Default fallback
-        return NextAgentDecision(
-            agent_name="AnalystAgent",
-            confidence=0.6,
-            reasoning="Default fallback to analysis",
-            recommended_inputs=workflow_context.accumulated_outputs,
-            goal_for_agent=f"Continue working on: {workflow_context.user_goal}"
-        )
 
 
 def execute_multi_agent_workflow(user_goal: str, initial_inputs: Dict[str, Any],

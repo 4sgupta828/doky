@@ -75,7 +75,6 @@ class RoutingResult:
     confidence: float
     reasoning: str
     recommended_inputs: Dict[str, Any]
-    fallback_decision: Optional[RoutingDecision] = None
 
 
 class LLMRouter:
@@ -100,7 +99,10 @@ class LLMRouter:
             RoutingResult with decision, confidence, and reasoning
         """
         if not self.llm_client:
-            return self._fallback_routing(context)
+            raise RuntimeError(
+                "LLM client is required for routing decisions. "
+                "No fallback routing available - please ensure OpenAI LLM Tool is properly configured."
+            )
         
         try:
             # Build routing prompt based on agent type
@@ -116,8 +118,8 @@ class LLMRouter:
             return self._create_routing_result(response_data, context)
             
         except Exception as e:
-            logger.warning(f"LLM routing failed: {e}. Using fallback routing.")
-            return self._fallback_routing(context)
+            logger.error(f"LLM routing failed: {e}")
+            raise RuntimeError(f"LLM routing failed: {e}. No fallback available - please check LLM configuration.")
     
     def _build_routing_prompt(self, context: RoutingContext) -> str:
         """Build agent-specific routing prompt."""
@@ -454,9 +456,9 @@ class LLMRouter:
                 break
         
         if not decision:
-            # Try to find a close match or use fallback
-            logger.warning(f"Invalid routing decision: {decision_str}. Using fallback.")
-            return self._fallback_routing(context)
+            # Fail fast on invalid routing decision
+            logger.error(f"Invalid routing decision: {decision_str}. Cannot continue without valid LLM routing.")
+            raise ValueError(f"Invalid routing decision from LLM: {decision_str}")
         
         return RoutingResult(
             decision=decision,
@@ -465,65 +467,6 @@ class LLMRouter:
             recommended_inputs=response_data.get("recommended_inputs", {})
         )
     
-    def _fallback_routing(self, context: RoutingContext) -> RoutingResult:
-        """Provide fallback routing when LLM routing fails."""
-        goal_lower = context.goal.lower()
-        
-        if context.agent_type == "AnalystAgent":
-            if any(word in goal_lower for word in ["problem", "error", "debug", "diagnose"]):
-                decision = RoutingDecision.PROBLEM_ANALYSIS
-            elif any(word in goal_lower for word in ["quality", "security", "audit"]):
-                decision = RoutingDecision.QUALITY_ANALYSIS
-            elif any(word in goal_lower for word in ["environment", "system"]):
-                decision = RoutingDecision.ENVIRONMENT_ANALYSIS
-            elif "code_files" in context.inputs:
-                decision = RoutingDecision.CODE_ANALYSIS
-            else:
-                decision = RoutingDecision.COMPREHENSIVE_ANALYSIS
-                
-        elif context.agent_type == "CreatorAgent":
-            if any(word in goal_lower for word in ["test", "testing"]):
-                decision = RoutingDecision.TEST_CREATION
-            elif any(word in goal_lower for word in ["documentation", "readme", "docs"]):
-                decision = RoutingDecision.DOCUMENTATION_CREATION
-            elif any(word in goal_lower for word in ["spec", "specification"]):
-                decision = RoutingDecision.SPECIFICATION_CREATION
-            else:
-                decision = RoutingDecision.CODE_CREATION
-                
-        elif context.agent_type == "StrategistAgent":
-            if "task_graph" in context.inputs:
-                decision = RoutingDecision.WORKFLOW_ORCHESTRATION
-            else:
-                decision = RoutingDecision.TASK_PLANNING
-                
-        elif context.agent_type == "ExecutorAgent":
-            if any(word in goal_lower for word in ["test", "run test"]):
-                decision = RoutingDecision.TEST_EXECUTION
-            elif any(word in goal_lower for word in ["validate", "check"]):
-                decision = RoutingDecision.CODE_VALIDATION
-            elif "commands" in context.inputs:
-                decision = RoutingDecision.SHELL_EXECUTION
-            else:
-                decision = RoutingDecision.FILE_OPERATIONS
-                
-        elif context.agent_type == "SurgeonAgent":
-            if any(word in goal_lower for word in ["requirements", "dependencies"]):
-                decision = RoutingDecision.REQUIREMENTS_MANAGEMENT
-            elif any(word in goal_lower for word in ["config", "configuration"]):
-                decision = RoutingDecision.CONFIGURATION_MANAGEMENT
-            else:
-                decision = RoutingDecision.CODE_MODIFICATION
-        else:
-            # Generic fallback
-            decision = list(RoutingDecision)[0]
-        
-        return RoutingResult(
-            decision=decision,
-            confidence=0.6,
-            reasoning="Fallback routing based on keyword matching",
-            recommended_inputs={}
-        )
 
 
 def create_routing_context(agent_type: str, goal: str, inputs: Dict[str, Any], 

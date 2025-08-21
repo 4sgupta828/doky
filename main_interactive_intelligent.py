@@ -250,7 +250,7 @@ class IntelligentInteractiveSession:
                 f"\n📊 Session Status:\n"
                 f"   • Active Workflows: {active_count}\n"
                 f"   • Goals Executed: {session_count}\n"
-                f"   • LLM Client: {'Connected' if self.llm_client else 'Fallback Mode'}\n"
+                f"   • LLM Client: {self._get_llm_client_status()}\n"
                 f"   • Workspace: {self.global_context.workspace_path}"
             )
     
@@ -325,6 +325,15 @@ FOUNDATION AGENTS:
         
         self.ui.display_system_message(help_text)
     
+    def _get_llm_client_status(self) -> str:
+        """Get the LLM client status string."""
+        if not self.llm_client:
+            return "Fallback Mode"
+        elif hasattr(self.llm_client, '__class__') and 'Mock' in self.llm_client.__class__.__name__:
+            return "Mock LLM (Testing)"
+        else:
+            return "Connected"
+    
     def _cleanup(self):
         """Cleanup session resources."""
         try:
@@ -367,7 +376,22 @@ def main(args: List[str]) -> None:
         "--llm-client",
         type=str,
         default=None,
-        help="LLM client configuration (optional - will use fallback routing if not provided)."
+        help="LLM client configuration (optional - defaults to OpenAI)."
+    )
+    parser.add_argument(
+        "--development-mode",
+        action="store_true",
+        help="Development mode: try real LLM, fallback to mock if unavailable."
+    )
+    parser.add_argument(
+        "--use-mock",
+        action="store_true", 
+        help="Use mock LLM client for testing (not for production)."
+    )
+    parser.add_argument(
+        "--no-llm",
+        action="store_true",
+        help="Disable LLM completely and use only fallback routing."
     )
     
     # Handle test flag
@@ -379,12 +403,70 @@ def main(args: List[str]) -> None:
     # Setup logging
     setup_logger(suppress_console_logs=parsed_args.quiet_logs)
     
-    # Initialize LLM client (you would implement this based on your LLM setup)
+    # Initialize LLM client with fail-fast behavior for production
     llm_client = None
-    if parsed_args.llm_client:
-        # This would initialize your specific LLM client
-        # llm_client = initialize_llm_client(parsed_args.llm_client)
-        pass
+    
+    try:
+        from llm_client import LLMClientFactory, get_llm_status
+        
+        if parsed_args.llm_client:
+            # Custom LLM client configuration
+            logger.info(f"Using custom LLM client configuration: {parsed_args.llm_client}")
+            # This would initialize your specific LLM client based on config
+            llm_client = LLMClientFactory.create_client("openai")
+            
+        elif hasattr(parsed_args, 'development_mode') and parsed_args.development_mode:
+            # Development mode: try real LLM, fallback to mock
+            llm_client = LLMClientFactory.create_development_client()
+            
+        elif hasattr(parsed_args, 'use_mock') and parsed_args.use_mock:
+            # Explicitly requested mock LLM
+            llm_client = LLMClientFactory.create_client("mock", enable_logging=not parsed_args.quiet_logs)
+            logger.info("Using mock LLM client for testing")
+            
+        elif hasattr(parsed_args, 'no_llm') and parsed_args.no_llm:
+            # No LLM requested - use fallback routing only
+            llm_client = None
+            logger.info("LLM disabled - using fallback routing only")
+            
+        else:
+            # Production mode: require real LLM, fail fast if not available
+            try:
+                llm_client = LLMClientFactory.create_production_client()
+                logger.info("Using OpenAI LLM client for intelligent routing")
+                
+            except Exception as production_error:
+                # Check LLM status for helpful error message
+                status = get_llm_status()
+                
+                error_msg = "❌ PRODUCTION LLM CLIENT REQUIRED BUT NOT AVAILABLE\n\n"
+                error_msg += f"Error: {production_error}\n\n"
+                error_msg += "Required for production:\n"
+                error_msg += f"✓ OpenAI package installed: {status['openai_package_installed']}\n"
+                error_msg += f"✓ OPENAI_API_KEY available: {status['openai_key_available']}\n"
+                error_msg += f"✓ .env file exists: {status['env_file_exists']}\n"
+                error_msg += f"✓ Can create client: {status['can_create_client']}\n"
+                
+                if not status['openai_package_installed']:
+                    error_msg += "\n💡 Fix: pip install openai"
+                elif not status['openai_key_available']:
+                    error_msg += "\n💡 Fix: Set OPENAI_API_KEY in environment or create .env file"
+                    error_msg += "\n    Example .env file:"
+                    error_msg += "\n    OPENAI_API_KEY=sk-your-key-here"
+                
+                error_msg += "\n\n🔧 Alternative options:"
+                error_msg += "\n  • Development mode: python main_interactive_intelligent.py --development-mode"
+                error_msg += "\n  • Mock testing: python main_interactive_intelligent.py --use-mock"
+                error_msg += "\n  • Fallback only: python main_interactive_intelligent.py --no-llm"
+                
+                logger.critical(error_msg)
+                print(f"\n{Style.Fg.ERROR}{error_msg}{Style.RESET}")
+                sys.exit(1)
+                
+    except ImportError as e:
+        logger.critical(f"Failed to import LLM client: {e}")
+        print(f"\n❌ {Style.Fg.ERROR}LLM client dependencies not available: {e}{Style.RESET}")
+        sys.exit(1)
     
     # Start intelligent session
     try:
