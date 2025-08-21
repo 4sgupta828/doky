@@ -15,7 +15,8 @@ from .coder import CoderAgent
 from .test_generator import TestGenerationAgent
 from .test_runner import TestRunnerAgent
 from .tooling import ToolingAgent
-from .debugging import DebuggingAgent
+# Debugging functionality moved to foundational agents (fagents/debugger.py)
+# from .debugging import DebuggingAgent
 from .script_executor import ScriptExecutorAgent
 from .quality_officer import QualityOfficerAgent
 from .plan_refiner import PlanRefinementAgent
@@ -108,7 +109,7 @@ AGENT_REGISTRY: Dict[str, Type[BaseAgent]] = {
     "ToolingAgent": ToolingAgent,
 
     # Diagnostics & Quality Agents
-    "DebuggingAgent": DebuggingAgent,
+    # "DebuggingAgent": DebuggingAgent,  # Moved to foundational agents (fagents/debugger.py)
     "ScriptExecutorAgent": ScriptExecutorAgent,
     "QualityOfficerAgent": QualityOfficerAgent,
 }
@@ -154,7 +155,7 @@ AGENT_ALIASES: Dict[str, str] = {
     # Environment & Diagnostics
     # "@context": "ContextBuilderAgent",  # File does not exist
     "@run": "ToolingAgent",
-    "@debug": "DebuggingAgent",
+    # "@debug": "DebuggingAgent",  # Moved to foundational agents (use @debugger instead)
     "@script": "ScriptExecutorAgent",
     "@audit": "QualityOfficerAgent",
 }

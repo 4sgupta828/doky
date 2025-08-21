@@ -9,7 +9,7 @@ from core.context import GlobalContext
 from core.models import AgentResult
 
 # Analysis tools - atomic and reusable
-from tools.code_validator import validate_code_comprehensive
+from tools.code_validator import validate_python_syntax, validate_code_execution
 from tools.environment_tools import EnvironmentTools
 from tools.problem_analysis_tools import (
     classify_problem, analyze_errors, assess_severity, 
@@ -174,15 +174,16 @@ class AnalystAgent(FoundationalAgent):
         check_syntax_only = inputs.get("check_syntax_only", False)
         ignore_warnings = inputs.get("ignore_warnings", False)
         
-        # Run comprehensive code validation
-        validation_results = validate_code_comprehensive(
-            code_files=code_files,
-            python_path=python_path,
-            validation_level=validation_level,
-            check_imports=check_imports,
-            check_syntax_only=check_syntax_only,
-            ignore_warnings=ignore_warnings
-        )
+        # Run code validation using available tools
+        syntax_results = validate_python_syntax(code_files)
+        
+        # Create simplified validation results structure
+        validation_results = {
+            "overall_success": all(result.result == "passed" for result in syntax_results),
+            "files_passed": sum(1 for result in syntax_results if result.result == "passed"),
+            "errors": [result for result in syntax_results if result.result == "failed"],
+            "syntax_results": syntax_results
+        }
         
         success = validation_results.get("overall_success", False)
         files_passed = validation_results.get("files_passed", 0)

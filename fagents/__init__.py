@@ -8,6 +8,7 @@ from .analyst import AnalystAgent
 from .strategist import StrategistAgent
 from .creator import CreatorAgent
 from .surgeon import SurgeonAgent
+from .debugger import DebuggingAgent
 
 # Get a logger instance for this module
 logger = logging.getLogger(__name__)
@@ -18,6 +19,7 @@ FOUNDATIONAL_AGENT_REGISTRY: Dict[str, Type[FoundationalAgent]] = {
     "StrategistAgent": StrategistAgent,
     "CreatorAgent": CreatorAgent,
     "SurgeonAgent": SurgeonAgent,
+    "DebuggingAgent": DebuggingAgent,
 }
 
 # User-friendly aliases for foundational agents
@@ -26,6 +28,7 @@ FOUNDATIONAL_AGENT_ALIASES: Dict[str, str] = {
     "@strategist": "StrategistAgent",
     "@creator": "CreatorAgent",
     "@surgeon": "SurgeonAgent",
+    "@debugger": "DebuggingAgent",
 }
 
 def get_foundational_agent(agent_name: str) -> FoundationalAgent:
