@@ -470,27 +470,21 @@ def build_code_generation_prompt(context: CodeGenerationContext) -> str:
     
     quality_instructions = "\n        ".join([f"- {inst}" for inst in quality_config["instructions"]])
     
+    # Use original CoderAgent prompt format - preserved exactly
     return f"""
-        You are an expert {context.language.value} developer. Your task is to write {quality_config["description"]} based on the provided technical specification.
+        You are an expert software developer. Your task is to write {quality_config["description"]} based on the provided technical specification.
         
-        **Programming Language:** {context.language.value.title()}
-        **Code Quality Level:** {context.quality_level.value.upper()}
+        **Code Quality Level: {context.quality_level.value.upper()}**
         
         **Technical Specification / Goal:**
         ---
         {context.technical_spec}
         ---
-        
-        **High-Level Goal:**
-        {context.goal}
-        
         {files_section}
-        
-        {tech_context}
-        
+
         **Existing Code for Context (if any):**
         ---
-        {existing_code_str if existing_code_str else "No existing code provided. You are writing these files from scratch."}
+        {existing_code_str if context.existing_code else "No existing code provided. You are writing these files from scratch."}
         ---
 
         **Quality-Specific Instructions:**
@@ -501,8 +495,8 @@ def build_code_generation_prompt(context: CodeGenerationContext) -> str:
 
         **JSON Output Format Example:**
         {{
-            "src/main.{get_file_extension(context.language)}": "// Complete code here",
-            "src/utils.{get_file_extension(context.language)}": "// Complete code here"
+            "src/main.py": "def main():\\n    print('Hello')",
+            "src/utils.py": "def helper():\\n    pass"
         }}
 
         Now, generate the code files.

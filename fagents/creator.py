@@ -114,14 +114,14 @@ class CreatorAgent(FoundationalAgent):
             elif creation_type == CreationType.FULL_PROJECT:
                 return self._handle_full_project_creation(goal, inputs, global_context)
             else:
-                return self.create_result(
+                return AgentResult(
                     success=False,
                     message=f"Unknown creation type: {creation_type}"
                 )
                 
         except Exception as e:
             logger.error(f"Error in CreatorAgent execution: {e}")
-            return self.create_result(
+            return AgentResult(
                 success=False,
                 message=f"Creation failed: {str(e)}"
             )
@@ -197,7 +197,7 @@ class CreatorAgent(FoundationalAgent):
         
         if result.success:
             self.report_intermediate_output("generated_code", result.generated_files)
-            return self.create_result(
+            return AgentResult(
                 success=True,
                 message="Successfully generated code",
                 outputs={
@@ -208,7 +208,7 @@ class CreatorAgent(FoundationalAgent):
                 }
             )
         else:
-            return self.create_result(success=False, message=result.error_details or "Code generation failed")
+            return AgentResult(success=False, message=result.error_details or "Code generation failed")
 
     def _handle_test_generation(self, goal: str, inputs: Dict[str, Any], global_context: GlobalContext) -> AgentResult:
         """Handle test generation tasks."""
@@ -248,7 +248,7 @@ class CreatorAgent(FoundationalAgent):
         
         if result.success:
             self.report_intermediate_output("generated_tests", result.generated_tests)
-            return self.create_result(
+            return AgentResult(
                 success=True,
                 message="Successfully generated tests",
                 outputs={
@@ -259,7 +259,7 @@ class CreatorAgent(FoundationalAgent):
                 }
             )
         else:
-            return self.create_result(success=False, message=result.error_details or "Test generation failed")
+            return AgentResult(success=False, message=result.error_details or "Test generation failed")
 
     def _handle_documentation_generation(self, goal: str, inputs: Dict[str, Any], global_context: GlobalContext) -> AgentResult:
         """Handle documentation generation tasks."""
@@ -305,7 +305,7 @@ class CreatorAgent(FoundationalAgent):
         
         if result.success:
             self.report_intermediate_output("generated_documentation", result.generated_docs)
-            return self.create_result(
+            return AgentResult(
                 success=True,
                 message="Successfully generated documentation",
                 outputs={
@@ -315,7 +315,7 @@ class CreatorAgent(FoundationalAgent):
                 }
             )
         else:
-            return self.create_result(success=False, message=result.error_details or "Documentation generation failed")
+            return AgentResult(success=False, message=result.error_details or "Documentation generation failed")
 
     def _handle_specification_creation(self, goal: str, inputs: Dict[str, Any], global_context: GlobalContext) -> AgentResult:
         """Handle technical specification creation tasks."""
@@ -355,7 +355,7 @@ class CreatorAgent(FoundationalAgent):
         
         if result.success:
             self.report_intermediate_output("technical_specification", result.specification_content)
-            return self.create_result(
+            return AgentResult(
                 success=True,
                 message=result.message,
                 outputs={
@@ -366,7 +366,7 @@ class CreatorAgent(FoundationalAgent):
                 }
             )
         else:
-            return self.create_result(success=False, message=result.message)
+            return AgentResult(success=False, message=result.message)
 
     def _handle_manifest_planning(self, goal: str, inputs: Dict[str, Any], global_context: GlobalContext) -> AgentResult:
         """Handle project manifest and structure planning tasks."""
@@ -408,7 +408,7 @@ class CreatorAgent(FoundationalAgent):
         
         if result.success:
             self.report_intermediate_output("file_manifest", {"files_to_create": result.files_to_create})
-            return self.create_result(
+            return AgentResult(
                 success=True,
                 message=result.message,
                 outputs={
@@ -418,7 +418,7 @@ class CreatorAgent(FoundationalAgent):
                 }
             )
         else:
-            return self.create_result(success=False, message=result.message)
+            return AgentResult(success=False, message=result.message)
 
     def _handle_full_project_creation(self, goal: str, inputs: Dict[str, Any], global_context: GlobalContext) -> AgentResult:
         """Handle full project creation by orchestrating multiple creation tasks."""
@@ -462,14 +462,14 @@ class CreatorAgent(FoundationalAgent):
                 "directory_structure": manifest_result.outputs["directory_structure"]
             }
             
-            return self.create_result(
+            return AgentResult(
                 success=True,
                 message="Successfully created full project scaffold",
                 outputs=project_outputs
             )
             
         except Exception as e:
-            return self.create_result(
+            return AgentResult(
                 success=False,
                 message=f"Failed to create full project: {str(e)}"
             )

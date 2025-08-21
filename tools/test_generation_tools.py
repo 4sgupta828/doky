@@ -564,40 +564,41 @@ def _build_test_generation_prompt(source_file: str, source_code: str, context: T
         TestQuality.PRODUCTION: "Generate extensive test suite with fixtures, mocks, and integration tests"
     }
     
+    # Use original TestGenerationAgent prompt format - preserved exactly
+    quality_descriptions = {
+        TestQuality.FAST: "basic test cases focusing on core functionality",
+        TestQuality.DECENT: "comprehensive test cases with edge cases and error handling", 
+        TestQuality.PRODUCTION: "extensive test suite with fixtures, mocks, and integration tests"
+    }
+    
     return f"""
-You are an expert test engineer. Generate comprehensive {context.test_type.value} tests for the following source code.
+        You are an expert QA Engineer specializing in Python. Your task is to write
+        {quality_descriptions[context.test_quality]} using the `pytest` framework for the provided source code,
+        based on its technical specification.
+        
+        **Test Quality Level: {context.test_quality.value.upper()}**
+        **Technical Specification:**
+        ---
+        {context.specification or f"Generate {context.test_type.value} tests for the source code in {source_file}"}
+        ---
+        **Source Code to Test:**
+        ---
+        --- File: {source_file} ---
+        ```python
+        {source_code}
+        ```
+        ---
 
-**Source File:** {source_file}
+        **Instructions for {context.test_type.value.title()} Tests ({context.test_quality.value.upper()} Quality):**
+        1. Write comprehensive test cases using pytest
+        2. Include fixtures and parametrized tests where appropriate
+        3. Test both normal operation and error conditions
+        4. Follow pytest best practices and conventions
+        5. Generate a complete test file ready for execution
 
-**Source Code:**
-```
-{source_code}
-```
-
-**Test Requirements:**
-- Framework: {context.framework.value}
-- Test Type: {context.test_type.value}
-- Quality Level: {context.test_quality.value}
-
-**Framework Instructions:**
-{framework_instructions.get(context.framework, "Use appropriate testing patterns")}
-
-**Quality Instructions:**
-{quality_instructions.get(context.test_quality, "Generate standard test coverage")}
-
-**Additional Context:**
-{context.specification or "No additional specification provided"}
-
-**Output Requirements:**
-Generate complete test code that:
-1. Tests all public functions and methods
-2. Includes appropriate test fixtures and setup
-3. Tests both success and error cases
-4. Follows {context.framework.value} best practices
-5. Is ready to run without modification
-
-Return only the complete test code, no additional explanation.
-"""
+        **Output Format:**
+        Return only the complete Python test code without any additional explanation or markdown formatting.
+        """
 
 
 def _extract_test_code_from_response(response: str) -> str:

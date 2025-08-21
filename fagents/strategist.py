@@ -1,4 +1,5 @@
 # fagents/strategist.py
+import json
 import logging
 from typing import Dict, Any, List, Optional
 import uuid
@@ -44,12 +45,13 @@ class StrategistAgent(FoundationalAgent):
     Unique Value: Can decompose ANY complex problem into executable workflows
     """
     
-    def __init__(self, agent_registry: Dict[str, Any] = None):
+    def __init__(self, agent_registry: Dict[str, Any] = None, llm_client: Any = None):
         super().__init__(
             name="StrategistAgent",
             description="Task decomposition and intelligent orchestration agent that plans and coordinates complex workflows."
         )
         self.agent_registry = agent_registry or {}
+        self._llm_client = llm_client
     
     def execute(self, goal: str, inputs: Dict[str, Any], global_context: GlobalContext) -> AgentResult:
         """
@@ -172,8 +174,12 @@ class StrategistAgent(FoundationalAgent):
             preferences=inputs.get("preferences", {})
         )
         
-        # Generate task graph
-        task_graph = generate_task_graph(planning_context)
+        # Generate task graph using original PlannerAgent LLM prompts or fallback
+        if self._llm_client:
+            task_graph = self._generate_task_graph_with_llm(planning_context, intent_analysis, global_context)
+        else:
+            # Fallback to rule-based generation
+            task_graph = generate_task_graph(planning_context)
         
         # Estimate duration and identify critical path
         workflow_steps = self._convert_task_graph_to_steps(task_graph)
@@ -469,6 +475,205 @@ class StrategistAgent(FoundationalAgent):
             steps.append(step)
         
         return steps
+    
+    def _generate_task_graph_with_llm(self, planning_context: PlanningContext, intent_analysis: Dict[str, Any], global_context: GlobalContext) -> TaskGraph:
+        """
+        Generate task graph using original PlannerAgent LLM prompts.
+        Preserved exactly as in the original agent.
+        """
+        try:
+            # First use original intent analysis prompt
+            context_summary = self._build_context_summary(global_context)
+            intent_prompt = self._build_intent_analysis_prompt(planning_context.goal, context_summary)
+            
+            intent_response_str = self._llm_client.invoke(intent_prompt)
+            import json
+            intent_data = json.loads(intent_response_str)
+            user_intent = intent_data.get("intent", planning_context.user_intent)
+            quality_str = intent_data.get("planning_quality", planning_context.quality_level.value)
+            
+            # Get agent capabilities
+            agent_capabilities = self._get_agent_capabilities()
+            
+            # Get quality instructions
+            quality_instructions = self._get_quality_instructions(planning_context.quality_level)
+            
+            # Build planning prompt using original format
+            planning_prompt = self._build_planning_prompt(
+                intent=user_intent,
+                context_summary=context_summary,
+                quality=planning_context.quality_level,
+                quality_instructions=quality_instructions,
+                agent_capabilities=agent_capabilities
+            )
+            
+            plan_response_str = self._llm_client.invoke(planning_prompt)
+            plan_data = json.loads(plan_response_str)
+            
+            # Convert to TaskGraph
+            task_graph = TaskGraph(**plan_data)
+            
+            if not task_graph.nodes:
+                raise ValueError("LLM failed to generate any tasks for the plan.")
+                
+            return task_graph
+            
+        except Exception as e:
+            logger.error(f"LLM task graph generation failed: {e}")
+            # Fallback to rule-based generation
+            return generate_task_graph(planning_context)
+    
+    def _build_intent_analysis_prompt(self, goal: str, context_summary: Dict) -> str:
+        """Original PlannerAgent intent analysis prompt - preserved exactly."""
+        return f"""
+        You are an expert software development analyst. Analyze the user's request to understand their true intent and determine the appropriate planning quality.
+
+        USER GOAL: "{goal}"
+        
+        PROJECT CONTEXT:
+        {json.dumps(context_summary, indent=2)}
+        
+        Analyze the goal and context to determine:
+        1.  **intent**: A concise, one-sentence summary of the user's core objective.
+        2.  **planning_quality**: The appropriate quality level for the plan. Choose one of: "FAST", "DECENT", "PRODUCTION".
+            - Use "FAST" for simple requests, prototypes, or quick fixes.
+            - Use "DECENT" for standard feature development.
+            - Use "PRODUCTION" for complex, critical, or enterprise-grade features.
+
+        Your response must be a single JSON object with two keys: "intent" and "planning_quality".
+        
+        Example:
+        {{
+            "intent": "Refactor the existing user authentication module to use a more secure password hashing algorithm and add integration tests.",
+            "planning_quality": "PRODUCTION"
+        }}
+        """
+    
+    def _build_planning_prompt(self, intent: str, context_summary: Dict[str, Any], quality: PlanningQuality, quality_instructions: Dict, agent_capabilities: List[Dict]) -> str:
+        """Original PlannerAgent planning prompt - preserved exactly."""
+        quality_instructions_str = "\n        ".join([f"- {inst}" for inst in quality_instructions["instructions"]])
+
+        return f"""
+        You are the PlannerAgent, a master strategist for an AI agent collective.
+        Your mission is to decompose a user's intent into a detailed TaskGraph in JSON format.
+        
+        **User Intent:**
+        {intent}
+
+        **Planning Quality Level: {quality.value.upper()}**
+        **Instructions for this quality level:**
+        {quality_instructions_str}
+
+        **Available Agents (Your Tools):**
+        {json.dumps(agent_capabilities, indent=2)}
+
+        **Current Workspace Context:**
+        {json.dumps(context_summary, indent=2)}
+
+        **General Instructions:**
+        1.  Create a 'TaskNode' for each step with a unique `task_id`.
+        2.  Assign the most appropriate agent from the list of available agents.
+        3.  Define `dependencies` for each task using the `task_id` of prerequisite tasks.
+        4.  Define `input_artifact_keys` and `output_artifact_keys` for data flow.
+        5.  CRITICAL RULE: After any task that modifies code (e.g., CoderAgent), you MUST add a subsequent task to verify the change (e.g., TestRunnerAgent or CodeAnalysisAgent).
+        6.  Your output MUST be a valid JSON object representing the TaskGraph.
+
+        **JSON Output Format:**
+        {{
+            "nodes": {{
+                "task_id_1": {{ "task_id": "...", "goal": "...", ... }},
+                "task_id_2": {{ "task_id": "...", "goal": "...", ... }}
+            }}
+        }}
+
+        Now, generate the TaskGraph JSON for the provided user intent.
+        """
+    
+    def _build_context_summary(self, global_context: GlobalContext) -> Dict[str, Any]:
+        """Build context summary for prompt."""
+        context_summary = {
+            "workspace_files": [],
+            "recent_activities": [],
+            "current_state": "active"
+        }
+        
+        if global_context and global_context.workspace_path:
+            try:
+                # Get basic workspace info
+                from pathlib import Path
+                workspace = Path(global_context.workspace_path)
+                if workspace.exists():
+                    context_summary["workspace_files"] = [str(f.relative_to(workspace)) for f in workspace.rglob("*.py")][:20]  # First 20 files
+            except Exception as e:
+                logger.warning(f"Could not build context summary: {e}")
+        
+        return context_summary
+    
+    def _get_agent_capabilities(self) -> List[Dict]:
+        """Get agent capabilities in the format expected by PlannerAgent."""
+        capabilities = []
+        
+        # Default capabilities if registry not available
+        default_agents = [
+            {"name": "CoderAgent", "description": "Writes code based on specifications"},
+            {"name": "TestRunnerAgent", "description": "Executes tests and validates code"},
+            {"name": "AnalystAgent", "description": "Analyzes code quality and security"},
+            {"name": "CreatorAgent", "description": "Creates new code components and tests"},
+            {"name": "SurgeonAgent", "description": "Makes precise code modifications"},
+            {"name": "ExecutorAgent", "description": "Executes system operations and validations"}
+        ]
+        
+        if self.agent_registry:
+            for agent_name, agent_class in self.agent_registry.items():
+                try:
+                    # Try to get description from agent instance
+                    if hasattr(agent_class, 'description'):
+                        description = agent_class.description
+                    else:
+                        description = f"Agent: {agent_name}"
+                    capabilities.append({"name": agent_name, "description": description})
+                except Exception as e:
+                    logger.warning(f"Could not get capabilities for {agent_name}: {e}")
+        else:
+            capabilities = default_agents
+            
+        return capabilities
+    
+    def _get_quality_instructions(self, quality_level: PlanningQuality) -> Dict[str, List[str]]:
+        """Get quality-specific instructions matching original PlannerAgent."""
+        quality_configs = {
+            PlanningQuality.FAST: {
+                "description": "quick and minimal plans",
+                "instructions": [
+                    "Focus on speed over completeness",
+                    "Use minimal validation steps", 
+                    "Prefer simple, direct approaches",
+                    "Skip comprehensive testing unless critical"
+                ]
+            },
+            PlanningQuality.DECENT: {
+                "description": "balanced plans with moderate detail",
+                "instructions": [
+                    "Balance speed and quality",
+                    "Include basic validation and testing",
+                    "Use established patterns and practices",
+                    "Add reasonable error handling"
+                ]
+            },
+            PlanningQuality.PRODUCTION: {
+                "description": "comprehensive, enterprise-ready plans",
+                "instructions": [
+                    "Prioritize correctness and maintainability",
+                    "Include comprehensive testing strategy",
+                    "Add extensive validation and error handling",
+                    "Consider scalability and performance",
+                    "Include security considerations",
+                    "Document all major decisions"
+                ]
+            }
+        }
+        
+        return quality_configs.get(quality_level, quality_configs[PlanningQuality.DECENT])
     
     def _identify_parallel_groups(self, task_graph: TaskGraph) -> List[List[str]]:
         """Identify parallel execution groups in task graph."""

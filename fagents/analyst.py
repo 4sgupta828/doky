@@ -344,20 +344,59 @@ class AnalystAgent(FoundationalAgent):
             "security_scan": inputs.get("security_scan", True)
         }
         
-        # Run comprehensive quality analysis
-        quality_results = analyze_code_quality(code_files, analysis_options)
-        
-        # Additional security scanning if requested
-        if analysis_options.get("security_scan", True):
-            security_issues = []
-            for file_path, content in code_files.items():
-                file_security_issues = scan_for_security_patterns(content)
-                for issue in file_security_issues:
-                    issue["file_path"] = file_path
-                security_issues.extend(file_security_issues)
+        # Use original QualityOfficerAgent LLM prompt for comprehensive analysis
+        llm_client = getattr(self, '_llm_client', None)
+        if llm_client:
+            try:
+                # Original QualityOfficerAgent prompt
+                quality_prompt = self._build_quality_audit_prompt(code_files)
+                llm_response_str = llm_client.invoke(quality_prompt)
+                
+                import json
+                llm_quality_results = json.loads(llm_response_str)
+                
+                if "issues" in llm_quality_results and isinstance(llm_quality_results["issues"], list):
+                    # Convert to our expected format
+                    quality_results = {
+                        "total_issues": len(llm_quality_results["issues"]),
+                        "overall_quality": "excellent" if len(llm_quality_results["issues"]) == 0 else "good" if len(llm_quality_results["issues"]) < 5 else "needs_improvement",
+                        "llm_analysis_results": llm_quality_results["issues"],
+                        "security_scan_results": [issue for issue in llm_quality_results["issues"] if issue.get("category") == "Security"]
+                    }
+                else:
+                    raise ValueError("Invalid LLM response format")
+                    
+            except Exception as e:
+                logger.warning(f"LLM quality analysis failed ({e}), falling back to rule-based analysis")
+                # Fallback to rule-based analysis
+                quality_results = analyze_code_quality(code_files, analysis_options)
+                
+                # Additional security scanning if requested
+                if analysis_options.get("security_scan", True):
+                    security_issues = []
+                    for file_path, content in code_files.items():
+                        file_security_issues = scan_for_security_patterns(content)
+                        for issue in file_security_issues:
+                            issue["file_path"] = file_path
+                        security_issues.extend(file_security_issues)
+                    
+                    quality_results["security_scan_results"] = security_issues
+                    quality_results["total_issues"] += len(security_issues)
+        else:
+            # No LLM client available, use rule-based analysis
+            quality_results = analyze_code_quality(code_files, analysis_options)
             
-            quality_results["security_scan_results"] = security_issues
-            quality_results["total_issues"] += len(security_issues)
+            # Additional security scanning if requested
+            if analysis_options.get("security_scan", True):
+                security_issues = []
+                for file_path, content in code_files.items():
+                    file_security_issues = scan_for_security_patterns(content)
+                    for issue in file_security_issues:
+                        issue["file_path"] = file_path
+                    security_issues.extend(file_security_issues)
+                
+                quality_results["security_scan_results"] = security_issues
+                quality_results["total_issues"] += len(security_issues)
         
         total_issues = quality_results["total_issues"]
         overall_quality = quality_results["overall_quality"]
@@ -513,3 +552,59 @@ class AnalystAgent(FoundationalAgent):
             assessment["summary"] += f" - {issues_count} critical issues require attention"
         
         return assessment
+    
+    def _build_quality_audit_prompt(self, all_code: Dict[str, str]) -> str:
+        """
+        Original QualityOfficerAgent prompt for comprehensive security and quality audit.
+        Preserved exactly as in the original agent.
+        """
+        code_blocks = "\n\n".join(
+            f"--- File: {path} ---\n```python\n{content}\n```"
+            for path, content in all_code.items()
+        )
+
+        return f"""
+        You are an expert security researcher and principal software engineer. Your task is to
+        conduct a thorough security and quality audit of the following Python codebase.
+
+        **Source Code:**
+        ---
+        {code_blocks}
+        ---
+
+        **Instructions:**
+        Analyze the code for the following categories of issues:
+        1.  **Security Vulnerabilities**: Look for common vulnerabilities like SQL injection, Cross-Site Scripting (XSS), insecure deserialization, hardcoded secrets, and improper error handling.
+        2.  **Code Smells & Maintainability**: Identify anti-patterns, overly complex functions (high cyclomatic complexity), "magic numbers", code duplication, and poor naming conventions.
+        3.  **Best Practice Deviations**: Check for violations of PEP 8, missing docstrings, and non-idiomatic Python usage.
+
+        **Your output MUST be a single, valid JSON object with one key: `issues`**.
+        The `issues` key must hold a list of objects, where each object represents a single identified issue and has the following structure:
+        - `file_path`: The path to the file containing the issue.
+        - `line_number`: The line number where the issue occurs.
+        - `severity`: The severity of the issue ('Critical', 'High', 'Medium', 'Low').
+        - `category`: The type of issue ('Security', 'Maintainability', 'Best Practice').
+        - `description`: A clear, concise explanation of the issue and a suggestion for how to fix it.
+
+        **JSON Output Format Example:**
+        {{
+            "issues": [
+                {{
+                    "file_path": "src/database.py",
+                    "line_number": 42,
+                    "severity": "High",
+                    "category": "Security",
+                    "description": "A hardcoded password was found. Use environment variables or a secret manager instead."
+                }},
+                {{
+                    "file_path": "src/utils.py",
+                    "line_number": 15,
+                    "severity": "Low",
+                    "category": "Best Practice",
+                    "description": "Function `calculate` is missing a docstring explaining its purpose, arguments, and return value."
+                }}
+            ]
+        }}
+
+        If no issues are found, return an object with an empty `issues` list. Now, conduct the audit.
+        """
