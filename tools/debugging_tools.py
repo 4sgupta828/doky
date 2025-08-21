@@ -198,34 +198,45 @@ def generate_debugging_hypothesis(
 ) -> Dict[str, Any]:
     """
     Generate a debugging hypothesis based on evidence and previous attempts.
+    Uses the original DebuggingAgent analysis prompt.
     """
     if not llm_client:
         # Fallback to rule-based hypothesis generation
         return generate_rule_based_hypothesis(problem_description, evidence, debugging_state)
     
-    # Build prompt for LLM-based hypothesis generation
+    # Build the original analysis prompt from DebuggingAgent
     last_reflection = debugging_state.reflection_history[-1] if debugging_state.reflection_history else None
     
     prompt = f"""
-    **Persona**: You are an expert staff engineer specializing in root cause analysis.
+    **Persona**: You are an expert staff engineer and researcher, specializing in root cause analysis of complex software failures.
+
+    **Overall Goal**: Your primary objective is to analyze the provided context and evidence to form a new, actionable hypothesis that will lead to a successful bug fix.
 
     **Context**:
-    - **Problem**: {problem_description}
-    - **Previous Hypotheses Tested**: {json.dumps(debugging_state.hypotheses_tested)}
-    - **Previous Fix Attempts**: {json.dumps(debugging_state.fixes_attempted)}
-    - **Last Error**: {json.dumps(debugging_state.last_error_report, default=str)}
-    - **Last Reflection**: {json.dumps(last_reflection, default=str)}
-    - **Current Evidence**: {json.dumps(evidence, indent=2, default=str)}
+    - **Problem Statement**: {debugging_state.problem_description}
+    - **Debugging History**:
+      - Hypotheses Already Tested and Failed: {json.dumps(debugging_state.hypotheses_tested)}
+      - Fix Strategies Already Attempted: {json.dumps(debugging_state.fixes_attempted)}
+      - Last Known Error Report: {json.dumps(debugging_state.last_error_report, default=str)}
+      - Reflection on Last Failure: {json.dumps(last_reflection, default=str)}
+    - **Current Evidence**:
+      {json.dumps(evidence, indent=2, default=str)}
 
-    **Task**: Generate a NEW hypothesis that hasn't been tested yet.
+    **Your Task**:
+    1.  **Synthesize All Information**: Carefully consider the original problem, the history of failed attempts, and the latest evidence.
+    2.  **Formulate a New Hypothesis**: Based on your synthesis, generate a NEW and UNTRIED hypothesis. Do not repeat a hypothesis that has already been tested.
+    3.  **Determine a Solution Strategy**: Decide if the fix requires a small, targeted change ('SURGICAL') or a larger refactoring ('DESIGN_CHANGE').
 
-    **Output Format**: Return valid JSON:
+    **Constraints**:
+    - **Do Not Repeat Past Mistakes**: The `Debugging History` section shows what has already failed. Your new hypothesis must be different.
+    - **Be Actionable**: Your recommended strategy must be a clear, concrete action that another agent can take.
+
+    **Output Format**: You MUST return a single, valid JSON object with the following structure:
     {{
-        "root_cause_analysis": "Detailed explanation of the bug",
-        "primary_hypothesis": "NEW, untried hypothesis about the cause",
-        "solution_type": "SURGICAL|DESIGN_CHANGE", 
-        "recommended_strategy": "Specific approach to fix the issue",
-        "confidence": 0.0-1.0
+        "root_cause_analysis": "A detailed explanation of the bug, incorporating insights from the reflection on the last failure.",
+        "primary_hypothesis": "A NEW, UNTRIED hypothesis about the most likely cause of the failure.",
+        "solution_type": "SURGICAL|DESIGN_CHANGE",
+        "recommended_strategy": "A NEW, UNTRIED, and specific approach to fix the issue based on your new hypothesis."
     }}
     """
     
@@ -309,22 +320,30 @@ def perform_failure_reflection(
 ) -> Dict[str, Any]:
     """
     Perform post-mortem analysis on a failed fix attempt.
+    Uses the original DebuggingAgent reflection prompt.
     """
     if not llm_client:
         return perform_rule_based_reflection(old_error, new_error, fix_attempted)
     
+    # Original reflection prompt from DebuggingAgent
     prompt = f"""
-    You are analyzing a failed bug fix attempt.
+    You are a senior software engineer performing a post-mortem on a failed bug fix attempt.
+    Analyze the original error, the attempted fix, and the new error to guide the next debugging step.
 
-    **Original Error**: {json.dumps(old_error, indent=2, default=str)}
-    **Attempted Fix**: "{fix_attempted}"
-    **New Error**: {json.dumps(new_error, indent=2, default=str)}
+    **Original Error Report:**
+    {json.dumps(old_error, indent=2, default=str)}
 
-    Return JSON:
+    **Attempted Fix Strategy:**
+    "{fix_attempted}"
+
+    **New Error Report (after applying the fix):**
+    {json.dumps(new_error, indent=2, default=str)}
+
+    Analyze the situation and return a JSON object with this structure:
     {{
         "failure_category": "SAME_ERROR|NEW_ERROR|REGRESSION|INCOMPLETE_FIX|ENVIRONMENT_ISSUE",
-        "analysis": "Brief explanation of why the fix failed",
-        "next_strategy_hint": "Suggestion for next iteration"
+        "analysis": "A brief explanation of why the fix likely failed.",
+        "next_strategy_hint": "A high-level suggestion for what to try in the next iteration."
     }}
     """
     
@@ -406,20 +425,22 @@ def generate_instrumentation_plan(
 ) -> Dict[str, Dict[str, str]]:
     """
     Generate a plan for code instrumentation to gather debug information.
+    Uses the original debugging_strategies instrumentation prompt.
     """
     if not llm_client:
         return generate_simple_instrumentation_plan(hypothesis, code_context)
     
+    # Original instrumentation prompt from debugging_strategies.py
     prompt = f"""
-    Based on this hypothesis and code, where should I add debug print statements?
-    
+    Based on this hypothesis and code, where should I add debug print statements to get more information?
     Hypothesis: {json.dumps(hypothesis)}
-    Code files: {list(code_context.keys())}
+    Code: {json.dumps(code_context)}
 
-    Return JSON where keys are file paths and values map line numbers to print statements:
+    Return a JSON object where keys are file paths and values are dictionaries mapping line numbers to the Python print statements to insert.
+    Example:
     {{
       "src/main.py": {{
-        "42": "print(f'DEBUG: variable={{variable}}, status={{status}}')"
+        "42": "print(f'DEBUG: user_id={{user.id}}, status={{user.status}}')"
       }}
     }}
     """

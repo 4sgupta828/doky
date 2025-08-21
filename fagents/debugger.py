@@ -5,6 +5,7 @@ FOUNDATIONAL AGENT 6: DEBUGGER
 The Master Troubleshooter - Systematic bug diagnosis, hypothesis formation, and fix orchestration.
 """
 
+import json
 import logging
 from typing import Dict, Any, List, Optional
 
@@ -59,12 +60,13 @@ class DebuggingAgent(FoundationalAgent):
     Unique Value: Can systematically debug ANY problem through structured investigation
     """
     
-    def __init__(self):
+    def __init__(self, llm_client: Any = None):
         super().__init__(
             name="DebuggingAgent", 
             description="Master troubleshooter that systematically debugs problems through evidence, hypothesis, and validation."
         )
         self.max_debug_iterations = 5
+        self._llm_client = llm_client
     
     def execute(self, goal: str, inputs: Dict[str, Any], global_context: GlobalContext) -> AgentResult:
         """
@@ -314,7 +316,7 @@ class DebuggingAgent(FoundationalAgent):
                 problem_description=problem_description,
                 evidence=evidence,
                 debugging_state=debug_state,
-                llm_client=getattr(self, '_llm_client', None)
+                llm_client=self._llm_client
             )
             
             # Add hypothesis to state
@@ -464,6 +466,17 @@ class DebuggingAgent(FoundationalAgent):
                 # Check confidence threshold for user guidance
                 if debug_state.confidence < 0.4:
                     self.report_progress("Low confidence", "May need additional guidance or investigation")
+                    
+                    # Request user guidance when confidence is low
+                    if iteration_result.get("hypothesis_formed") and "hypothesis" in workflow_results["iterations_performed"][-1]["result"]:
+                        hypothesis = workflow_results["iterations_performed"][-1]["result"]["hypothesis"]
+                        if not self._request_user_guidance(hypothesis, debug_state):
+                            workflow_results["final_result"] = "user_cancelled"
+                            return AgentResult(
+                                success=False,
+                                message="Debugging session cancelled by user",
+                                outputs=workflow_results
+                            )
                     break
             
             # Debugging failed after max iterations
@@ -547,7 +560,7 @@ class DebuggingAgent(FoundationalAgent):
                     old_error=debug_state.last_error_report,
                     new_error=fix_result.get("error_details"),
                     fix_attempted=hypothesis.get("recommended_strategy", "unknown"),
-                    llm_client=getattr(self, '_llm_client', None)
+                    llm_client=self._llm_client
                 )
                 
                 debug_state.reflection_history.append(reflection)
@@ -579,7 +592,7 @@ class DebuggingAgent(FoundationalAgent):
                     old_error=debug_state.last_error_report,
                     new_error=validation_result.outputs.get("validation_result"),
                     fix_attempted=hypothesis.get("recommended_strategy", "unknown"),
-                    llm_client=getattr(self, '_llm_client', None)
+                    llm_client=self._llm_client
                 )
                 
                 debug_state.reflection_history.append(reflection)
@@ -643,8 +656,28 @@ class DebuggingAgent(FoundationalAgent):
             }
     
     def _generate_surgical_fix_script(self, hypothesis: Dict[str, Any], evidence: Dict[str, Any]) -> str:
-        """Generate surgical fix script based on hypothesis."""
-        # Simple script generation - could be enhanced with LLM
+        """Generate surgical fix script based on hypothesis using original prompt."""
+        # Use LLM client if available for surgical fix generation
+        if hasattr(self, '_llm_client') and self._llm_client:
+            try:
+                fix_prompt = self._build_surgical_fix_prompt(hypothesis, evidence)
+                response = self._llm_client.invoke(fix_prompt)
+                fix_data = json.loads(response)
+                suggested_fixes = fix_data.get("suggested_fix_diffs", {})
+                
+                # Convert to script format
+                script_parts = ["#!/bin/bash", f"# Surgical fix for: {hypothesis.get('primary_hypothesis', '')}", ""]
+                for file_path, diff_content in suggested_fixes.items():
+                    script_parts.append(f"# Applying fix to {file_path}")
+                    script_parts.append(f"echo 'Applying fix to {file_path}'")
+                    script_parts.append(f"# {diff_content}")
+                
+                return "\n".join(script_parts)
+                
+            except Exception as e:
+                logger.error(f"Failed to generate LLM surgical fix: {e}")
+        
+        # Fallback to simple script generation
         return f"""#!/bin/bash
 # Surgical fix for: {hypothesis.get('primary_hypothesis', '')}
 # Strategy: {hypothesis.get('recommended_strategy', '')}
@@ -653,6 +686,23 @@ echo "Applying surgical fix..."
 # Add specific fix commands based on hypothesis
 echo "Fix applied successfully"
 """
+    
+    def _build_surgical_fix_prompt(self, hypothesis: Dict[str, Any], evidence: Dict[str, Any]) -> str:
+        """Original surgical fix prompt from DebuggingAgent."""
+        code_context_str = json.dumps(evidence.get("code_context", {}), indent=2)
+        return f"""
+        You are an expert software developer specializing in surgical code fixes.
+        Based on the analysis and code, generate a set of code patches in the standard 'diff' format.
+        The fix may require changes to one or more files.
+
+        **Analysis**: {json.dumps(hypothesis, indent=2)}
+        **Relevant Code**:
+        ---
+        {code_context_str}
+        ---
+
+        Generate a JSON object with a single key, "suggested_fix_diffs", which is a dictionary where each key is a file path and each value is the code patch for that file.
+        """
     
     def _execute_auto_debugging(self, goal: str, inputs: Dict[str, Any], global_context: GlobalContext) -> AgentResult:
         """Auto-detect and execute appropriate debugging approach."""
@@ -664,3 +714,45 @@ echo "Fix applied successfully"
         
         # Otherwise start with bug reproduction
         return self._execute_bug_reproduction(goal, inputs, global_context)
+    
+    def _request_user_guidance(self, hypothesis: Dict[str, Any], state: DebuggingState) -> bool:
+        """
+        Request user guidance when confidence is low.
+        Uses the original user guidance prompt from DebuggingAgent.
+        """
+        # For now, return True to continue - in a full implementation this would
+        # integrate with a UI agent for user interaction
+        try:
+            # Original user guidance prompt from DebuggingAgent
+            guidance_prompt = f"""
+            I'm having trouble solving this bug. Here is my current analysis:
+            **Hypothesis**: {hypothesis.get('primary_hypothesis')}
+            **Proposed Strategy**: {hypothesis.get('recommended_strategy')}
+            
+            I have already tried: {', '.join(state.fixes_attempted) or 'nothing yet'}.
+            
+            Do you have any suggestions, or should I proceed? (Type your suggestion or press Enter to proceed)
+            """
+            
+            self.report_progress("User guidance requested", guidance_prompt)
+            
+            # In a full implementation, this would:
+            # 1. Use a ClarifierAgent to prompt the user
+            # 2. Wait for user input
+            # 3. Parse the response and update the debugging state
+            # 4. Return False if user wants to cancel
+            
+            # For now, assume user wants to proceed
+            return True
+            
+        except Exception as e:
+            logger.warning(f"User guidance request failed: {e}")
+            return True
+    
+    def _generate_new_spec_for_coder(self, hypothesis: Dict[str, Any], evidence: Dict[str, Any]) -> str:
+        """
+        Generate new specification for code changes.
+        Uses the original spec generation from DebuggingAgent.
+        """
+        affected_files = [f['path'] for f in evidence.get("code_context", {}).get("files", [])]
+        return f"# New Spec\n**Problem:** {hypothesis['root_cause_analysis']}\n**Changes:** {hypothesis['recommended_strategy']}\n**Files:** {json.dumps(affected_files)}"
