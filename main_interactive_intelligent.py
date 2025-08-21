@@ -80,7 +80,12 @@ class IntelligentInteractiveSession:
     
     def start(self):
         """Start the intelligent interactive session."""
-        self.ui.display_welcome_message()
+        # Display welcome message
+        print("\n" + "="*80)
+        print("🧠 INTELLIGENT FOUNDATION AGENT SYSTEM")
+        print("="*80)
+        print("Welcome to the intelligent multi-agent workflow coordination system!")
+        
         self.ui.display_system_message(
             "🧠 Intelligent Foundation Agent System Active\n"
             "   • Multi-agent workflow coordination\n"
@@ -105,7 +110,7 @@ class IntelligentInteractiveSession:
         while True:
             try:
                 # Get user input
-                user_input = self.ui.get_user_input().strip()
+                user_input = self.ui.prompt_for_input("💬 You").strip()
                 
                 if not user_input:
                     continue
@@ -134,7 +139,7 @@ class IntelligentInteractiveSession:
                 raise  # Re-raise to be caught by outer try-catch
             except Exception as e:
                 logger.error(f"Error in main loop: {e}", exc_info=True)
-                self.ui.display_error_message(f"An error occurred: {e}")
+                self.ui.display_system_message(f"❌ An error occurred: {e}", is_error=True)
     
     def _execute_user_goal(self, user_goal: str):
         """Execute a user goal using intelligent workflow coordination."""
@@ -168,7 +173,7 @@ class IntelligentInteractiveSession:
             
         except Exception as e:
             logger.error(f"Goal execution failed: {e}", exc_info=True)
-            self.ui.display_error_message(f"Goal execution failed: {e}")
+            self.ui.display_system_message(f"❌ Goal execution failed: {e}", is_error=True)
     
     def _display_workflow_results(self, result, user_goal: str):
         """Display comprehensive workflow execution results."""
@@ -219,7 +224,7 @@ class IntelligentInteractiveSession:
         else:
             # Show failure details
             if result.outputs and 'error' in result.outputs:
-                self.ui.display_error_message(f"Error Details: {result.outputs['error']}")
+                self.ui.display_system_message(f"❌ Error Details: {result.outputs['error']}", is_error=True)
     
     def _handle_status_command(self, command: str):
         """Handle status command to show workflow status."""
@@ -236,7 +241,7 @@ class IntelligentInteractiveSession:
                 self.ui.display_system_message(f"   Validated: {status['completion_validated']}")
                 self.ui.display_system_message(f"   Agents: {status['agents_used']}")
             else:
-                self.ui.display_error_message(f"Workflow not found: {workflow_id}")
+                self.ui.display_system_message(f"❌ Workflow not found: {workflow_id}", is_error=True)
         else:
             # General status
             active_count = len(self.active_workflows)
