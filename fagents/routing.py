@@ -217,11 +217,16 @@ class LLMRouter:
         **Decision Criteria:**
         1. **Creation Intent**: What type of content does the user actually want created?
         2. **Scope Analysis**: Is this a single component or a full project creation task?
-        3. **Input Utilization**: Which operation best uses the provided inputs?
-        4. **Development Phase**: What stage of development is this request addressing?
+        3. **Quality Level**: Should this be FAST (simple/prototype), DECENT (standard), or PRODUCTION (enterprise)?
+        4. **Input Utilization**: Which operation best uses the provided inputs?
+        5. **Development Phase**: What stage of development is this request addressing?
         
         **Critical Instructions:**
         - Choose the operation that directly creates what the user is asking for
+        - **Quality Level Selection:**
+          * FAST: Simple requests, prototypes, single functions, basic scripts
+          * DECENT: Standard development tasks, multi-component features
+          * PRODUCTION: Enterprise features, security-critical code, comprehensive systems
         - If the goal mentions "test" or "testing", favor tests creation
         - If the goal mentions "documentation", "readme", or "docs", favor documentation
         - If the goal mentions "spec", "requirements", or "technical specification", favor specification
@@ -235,7 +240,10 @@ class LLMRouter:
             "decision": "code|tests|documentation|specification|manifest|full_project",
             "confidence": 0.9,
             "reasoning": "Clear explanation of what content type the user wants created",
-            "recommended_inputs": {{"key": "value"}}
+            "recommended_inputs": {{
+                "quality": "fast|decent|production",
+                "other_key": "value"
+            }}
         }}
         
         Analyze the goal and determine what the user wants to create.

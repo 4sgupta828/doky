@@ -43,7 +43,7 @@ class TestGenerationContext:
     goal: str
     source_files: Dict[str, str]
     test_type: TestType = TestType.UNIT
-    test_quality: TestQuality = TestQuality.DECENT
+    test_quality: TestQuality = TestQuality.FAST
     framework: TestFramework = TestFramework.PYTEST
     output_directory: str = "tests"
     specification: Optional[str] = None

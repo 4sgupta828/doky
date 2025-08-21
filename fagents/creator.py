@@ -28,7 +28,7 @@ from tools.code_generation_tools import (
     CodeLanguage
 )
 from tools.test_generation_tools import (
-    generate_tests, TestGenerationContext, TestType, TestFramework
+    generate_tests, TestGenerationContext, TestType, TestFramework, TestQuality
 )
 from tools.documentation_generation_tools import (
     generate_documentation, DocumentationContext, DocumentationType,
@@ -126,6 +126,10 @@ class CreatorAgent(FoundationalAgent):
             
             creation_type = creation_type_mapping.get(routing_result.decision, CreationType.CODE)
             
+            # Apply LLM-recommended quality level to inputs
+            if routing_result.recommended_inputs.get("quality"):
+                inputs["quality"] = routing_result.recommended_inputs["quality"]
+            
             self.report_progress("Creation type determined via LLM routing", 
                                f"{creation_type.value} (confidence: {routing_result.confidence:.2f})")
             logger.info(f"LLM routing reasoning: {routing_result.reasoning}")
@@ -194,7 +198,7 @@ class CreatorAgent(FoundationalAgent):
         
         # Extract parameters from inputs
         language = inputs.get("language", "Python")
-        quality = inputs.get("quality", CodeQuality.DECENT.value)
+        quality = inputs.get("quality", CodeQuality.FAST.value)
         requirements = inputs.get("code_requirements", inputs.get("requirements", goal))
         technical_spec = inputs.get("technical_spec", requirements)
         
@@ -207,7 +211,7 @@ class CreatorAgent(FoundationalAgent):
         try:
             quality_enum = CodeQuality(quality) if isinstance(quality, str) else quality
         except ValueError:
-            quality_enum = CodeQuality.DECENT
+            quality_enum = CodeQuality.FAST
 
         # Create context for code generation
         context = CodeGenerationContext(
@@ -265,6 +269,15 @@ class CreatorAgent(FoundationalAgent):
         code_to_test = inputs.get("code_to_test", inputs.get("target_code", ""))
         requirements = inputs.get("test_requirements", goal)
         
+        # Map quality to test quality (defaults to FAST, LLM can upgrade)
+        quality = inputs.get("quality", "fast")
+        if quality == "production":
+            test_quality_enum = TestQuality.PRODUCTION
+        elif quality == "decent":
+            test_quality_enum = TestQuality.DECENT
+        else:  # fast
+            test_quality_enum = TestQuality.FAST
+        
         # Map string values to enums
         try:
             test_type_enum = TestType(test_type) if isinstance(test_type, str) else test_type
@@ -276,15 +289,19 @@ class CreatorAgent(FoundationalAgent):
         except ValueError:
             framework_enum = TestFramework.PYTEST
 
-        # Create context for test generation
+        # Create context for test generation (fix parameter mismatch from migration)
+        source_files_dict = {}
+        if isinstance(code_to_test, dict):
+            source_files_dict = code_to_test
+        elif isinstance(code_to_test, str) and code_to_test.strip():
+            source_files_dict = {"target_code.py": code_to_test}
+        
         context = TestGenerationContext(
-            test_requirements=requirements,
+            goal=requirements,
+            source_files=source_files_dict,
             test_type=test_type_enum,
-            framework=framework_enum,
-            language=language,
-            code_to_test=code_to_test,
-            project_context=inputs.get("project_context", ""),
-            files_context=global_context.workspace.list_files() if global_context.workspace else []
+            test_quality=test_quality_enum,
+            framework=framework_enum
         )
 
         # Generate tests using the tools
@@ -326,7 +343,17 @@ class CreatorAgent(FoundationalAgent):
         
         # Extract parameters from inputs
         doc_type = inputs.get("documentation_type", inputs.get("doc_type", DocumentationType.README.value))
-        style = inputs.get("documentation_style", TemplateStyle.STANDARD.value)
+        
+        # Map quality to documentation style (FAST->MINIMAL, DECENT->STANDARD, PRODUCTION->COMPREHENSIVE)
+        quality = inputs.get("quality", "fast")
+        if quality == "fast":
+            default_style = TemplateStyle.MINIMAL.value
+        elif quality == "production":
+            default_style = TemplateStyle.COMPREHENSIVE.value
+        else:  # decent
+            default_style = TemplateStyle.STANDARD.value
+        
+        style = inputs.get("documentation_style", default_style)
         format_type = inputs.get("documentation_format", DocumentationFormat.MARKDOWN.value)
         content_source = inputs.get("content_source", inputs.get("code_to_document", ""))
         requirements = inputs.get("doc_requirements", goal)
@@ -383,7 +410,16 @@ class CreatorAgent(FoundationalAgent):
         # Extract parameters from inputs
         requirements = inputs.get("clarified_requirements", inputs.get("requirements", goal))
         spec_type = inputs.get("specification_type", SpecificationType.TECHNICAL_SPEC.value)
-        style = inputs.get("specification_style", SpecificationStyle.DETAILED.value)
+        # Map quality to specification style (FAST->MINIMAL, DECENT->STRUCTURED, PRODUCTION->COMPREHENSIVE)
+        quality = inputs.get("quality", "fast")
+        if quality == "fast":
+            default_style = SpecificationStyle.MINIMAL.value
+        elif quality == "production":
+            default_style = SpecificationStyle.COMPREHENSIVE.value
+        else:  # decent
+            default_style = SpecificationStyle.STRUCTURED.value
+        
+        style = inputs.get("specification_style", default_style)
         target_stack = inputs.get("target_stack", "Python/FastAPI")
         domain = inputs.get("domain", "")
         
