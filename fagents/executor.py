@@ -5,9 +5,8 @@ import subprocess
 import sys
 import time
 import tempfile
-import json
 from pathlib import Path
-from typing import Dict, Any, List, Optional, Union
+from typing import Dict, Any, List, Optional
 
 from .base import FoundationalAgent
 from core.context import GlobalContext
@@ -39,6 +38,7 @@ class FileSystemToolsWrapper:
     
     @staticmethod
     def write_file(target_path, content, encoding, backup_enabled, global_context):
+        # backup_enabled is available for future use if needed
         result = write_file(target_path, content, encoding, str(global_context.workspace_path))
         return {
             "success": result.success,
@@ -66,6 +66,7 @@ class FileSystemToolsWrapper:
     
     @staticmethod
     def delete_path(target_path, backup_enabled, global_context):
+        # backup_enabled is available for future use if needed
         result = delete_path(target_path, str(global_context.workspace_path))
         return {
             "success": result.success,
@@ -149,35 +150,39 @@ class ExecutorAgent(FoundationalAgent):
         logger.info(f"ExecutorAgent executing: '{goal}'")
         
         try:
-            # Use LLM-based routing to determine execution type
-            workspace_files = global_context.workspace.list_files() if global_context.workspace else []
-            routing_context = create_routing_context(
-                agent_type="ExecutorAgent",
-                goal=goal,
-                inputs=inputs,
-                workspace_files=workspace_files,
-                available_capabilities=list(self.get_capabilities().keys())
-            )
+            # Try LLM-based routing first if available
+            if self._llm_client:
+                try:
+                    workspace_files = global_context.workspace.list_files() if global_context.workspace else []
+                    routing_context = create_routing_context(
+                        agent_type="ExecutorAgent",
+                        goal=goal,
+                        inputs=inputs,
+                        workspace_files=workspace_files,
+                        available_capabilities=list(self.get_capabilities().keys())
+                    )
+                    
+                    routing_result = self.router.route_request(routing_context)
+                    
+                    # Map routing decision to handler
+                    operation_mapping = {
+                        RoutingDecision.TEST_EXECUTION: self._handle_test_execution,
+                        RoutingDecision.CODE_VALIDATION: self._handle_code_validation,
+                        RoutingDecision.SHELL_EXECUTION: self._handle_shell_execution,
+                        RoutingDecision.FILE_OPERATIONS: self._handle_file_operations,
+                        RoutingDecision.ENVIRONMENT_SETUP: self._handle_environment_setup,
+                    }
+                    
+                    handler = operation_mapping.get(routing_result.decision)
+                    if handler:
+                        logger.info(f"LLM routing: {routing_result.decision.value} (confidence: {routing_result.confidence:.2f})")
+                        logger.info(f"LLM routing reasoning: {routing_result.reasoning}")
+                        return handler(goal, inputs, global_context)
+                except RuntimeError as e:
+                    logger.warning(f"LLM routing failed: {e}. Falling back to intelligent routing.")
             
-            routing_result = self.router.route_request(routing_context)
-            
-            # Map routing decision to handler
-            operation_mapping = {
-                RoutingDecision.TEST_EXECUTION: self._handle_test_execution,
-                RoutingDecision.CODE_VALIDATION: self._handle_code_validation,
-                RoutingDecision.SHELL_EXECUTION: self._handle_shell_execution,
-                RoutingDecision.FILE_OPERATIONS: self._handle_file_operations,
-                RoutingDecision.ENVIRONMENT_SETUP: self._handle_environment_setup,
-            }
-            
-            handler = operation_mapping.get(routing_result.decision)
-            if handler:
-                logger.info(f"LLM routing: {routing_result.decision.value} (confidence: {routing_result.confidence:.2f})")
-                logger.info(f"LLM routing reasoning: {routing_result.reasoning}")
-                return handler(goal, inputs, global_context)
-            else:
-                # Fallback to intelligent routing
-                return self._handle_intelligent_routing(goal, inputs, global_context)
+            # Fallback to intelligent routing
+            return self._handle_intelligent_routing(goal, inputs, global_context)
 
         except Exception as e:
             error_msg = f"ExecutorAgent execution failed: {e}"
@@ -377,15 +382,15 @@ class ExecutorAgent(FoundationalAgent):
         commands = inputs.get("commands", [])
         purpose = inputs.get("purpose", "Shell command execution")
         working_directory = inputs.get("working_directory", str(global_context.workspace_path))
-        timeout = inputs.get("timeout", 120)
+        # timeout = inputs.get("timeout", 120)  # Available if needed for future use
         environment_vars = inputs.get("environment_vars")
         ignore_errors = inputs.get("ignore_errors", False)
 
         if not commands:
             return AgentResult(
                 success=False,
-                message="No commands provided for execution",
-                error_details={"required_input": "commands"}
+                message="No commands provided for execution. InterAgentRouter should provide structured commands in inputs when routing to ExecutorAgent for shell execution.",
+                error_details={"required_input": "commands", "goal": goal, "hint": "InterAgentRouter should extract commands from LLM goal and provide them in structured format"}
             )
 
         try:
@@ -504,6 +509,10 @@ class ExecutorAgent(FoundationalAgent):
         """Handle environment and dependency management operations."""
         logger.info("Handling environment setup and dependency management")
         
+        # Check if this is a Git repo initialization request
+        if "init" in goal.lower() and "repo" in goal.lower():
+            return self._handle_git_repo_setup(inputs, global_context)
+        
         # Check if this is a dependency operation vs environment setup
         operation = inputs.get("operation")
         if operation:
@@ -621,7 +630,7 @@ class ExecutorAgent(FoundationalAgent):
                 )
 
             # Step 4: Set up environment variables if provided
-            env_vars_result = self._setup_environment_variables(environment_vars)
+            self._setup_environment_variables(environment_vars)
 
             return AgentResult(
                 success=True,
@@ -647,6 +656,25 @@ class ExecutorAgent(FoundationalAgent):
     def _handle_intelligent_routing(self, goal: str, inputs: Dict[str, Any], global_context: GlobalContext) -> AgentResult:
         """Intelligently route operations based on goal and inputs."""
         logger.info("Using intelligent routing for execution")
+        
+        # Analyze goal keywords for automatic command generation
+        goal_lower = goal.lower()
+        
+        # Handle Git repository setup requests
+        if ("init" in goal_lower and "repo" in goal_lower) or ("git" in goal_lower and "init" in goal_lower):
+            return self._handle_git_repo_setup(inputs, global_context)
+        
+        # Handle environment/repo setup requests
+        if "fix" in goal_lower and "environment" in goal_lower:
+            # Generate default environment setup commands
+            setup_commands = [
+                "git init",
+                "git config user.name 'Agent User'",
+                "git config user.email 'agent@example.com'",
+                "git config --global --add safe.directory '*'"
+            ]
+            inputs["commands"] = setup_commands
+            return self._handle_shell_execution(goal, inputs, global_context)
         
         # Analyze inputs to determine operation type
         if inputs.get("commands") or inputs.get("command"):
@@ -1203,3 +1231,68 @@ class ExecutorAgent(FoundationalAgent):
             "success": True,
             "message": f"Set {len(environment_vars)} environment variables"
         }
+
+
+    def _handle_git_repo_setup(self, inputs: Dict[str, Any], global_context: GlobalContext) -> AgentResult:
+        """Handle Git repository initialization and setup."""
+        logger.info("Handling Git repository setup")
+        
+        workspace_path = inputs.get("workspace_path", str(global_context.workspace_path))
+        user_name = inputs.get("git_user_name", "Agent User")
+        user_email = inputs.get("git_user_email", "agent@example.com")
+        
+        # Commands to set up Git repo environment
+        commands = [
+            "git init",
+            f"git config user.name '{user_name}'",
+            f"git config user.email '{user_email}'",
+            "git config --global --add safe.directory '*'"
+        ]
+        
+        try:
+            command_results = []
+            failed_commands = []
+            
+            for command in commands:
+                logger.info(f"Executing: {command}")
+                
+                tool_output = execute_shell_command(
+                    command=command, 
+                    working_dir=workspace_path
+                )
+                
+                tool_output['command'] = command
+                command_results.append(tool_output)
+                
+                if tool_output['exit_code'] != 0:
+                    failed_commands.append(command)
+                    logger.error(f"Git setup command failed: {command}")
+                    # Don't stop on safe.directory failure as it might already be set
+                    if "safe.directory" not in command:
+                        break
+            
+            success = len(failed_commands) == 0 or (len(failed_commands) == 1 and "safe.directory" in failed_commands[0])
+            
+            if success:
+                message = f"Git repository successfully initialized at {workspace_path}"
+            else:
+                message = f"Git repository setup failed. Failed commands: {failed_commands}"
+            
+            return AgentResult(
+                success=success,
+                message=message,
+                outputs={
+                    "workspace_path": workspace_path,
+                    "commands_executed": [res['command'] for res in command_results],
+                    "command_results": command_results,
+                    "failed_commands": failed_commands,
+                    "git_configured": success
+                }
+            )
+            
+        except Exception as e:
+            return AgentResult(
+                success=False,
+                message=f"Git repository setup failed: {e}",
+                error_details={"exception": str(e)}
+            )

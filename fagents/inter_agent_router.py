@@ -308,6 +308,21 @@ class InterAgentRouter:
         - **ExecutorAgent**: Use for running tests, validation, builds, or system operations
         - **DebuggingAgent**: Use for systematic debugging and troubleshooting
         
+        **RECOMMENDED_INPUTS GUIDANCE:**
+        When routing to specific agents, provide structured inputs in recommended_inputs:
+        
+        - **ExecutorAgent**: For shell operations, provide:
+          {{"commands": ["command1", "command2"], "working_directory": "/path", "purpose": "description"}}
+          Example Git setup: {{"commands": ["git init", "git config user.name 'Agent User'", "git config user.email 'agent@example.com'"], "working_directory": "{str(global_context.workspace_path)}", "purpose": "Git repository initialization"}}
+        
+        - **CreatorAgent**: For file creation, provide:
+          {{"file_path": "path/to/file", "content_type": "python|javascript|markdown", "requirements": ["req1", "req2"]}}
+        
+        - **SurgeonAgent**: For modifications, provide:
+          {{"target_files": ["file1.py", "file2.py"], "operation": "fix|refactor|update", "specific_changes": ["change description"]}}
+        
+        - **Other agents**: Provide relevant context and parameters as appropriate
+        
         **COMPLETION DETECTION:**
         If you believe the user's goal has been substantially completed based on the execution history
         and accumulated outputs, set "is_completion" to true and route to AnalystAgent for final validation.
@@ -325,10 +340,12 @@ class InterAgentRouter:
             "confidence": 0.9,
             "reasoning": "Detailed explanation of why this agent makes the most directional progress",
             "goal_for_agent": "Specific, actionable goal for the chosen agent",
-            "recommended_inputs": {{"key": "value"}},
+            "recommended_inputs": {{"structured_inputs_based_on_agent_type": "see_guidance_above"}},
             "is_completion": false,
             "completion_summary": "Summary if workflow is complete, empty string otherwise"
         }}
+        
+        **IMPORTANT**: For ExecutorAgent, always provide specific commands in recommended_inputs when shell operations are needed.
         
         Analyze the current state and determine the next agent that will make the most directional progress.
         """
@@ -522,6 +539,17 @@ class InterAgentRouter:
         - For StrategistAgent: specify what to plan/coordinate
         - For AnalystAgent: specify what to analyze and why
         
+        **RECOMMENDED_INPUTS GUIDANCE:**
+        Provide structured inputs in recommended_inputs based on target agent:
+        
+        - **ExecutorAgent**: For shell operations, provide:
+          {{"commands": ["command1", "command2"], "working_directory": "/path", "purpose": "description"}}
+        - **CreatorAgent**: For file creation, provide:
+          {{"file_path": "path/to/file", "content_type": "python|javascript|markdown", "requirements": ["req1", "req2"]}}
+        - **SurgeonAgent**: For modifications, provide:
+          {{"target_files": ["file1.py"], "operation": "fix|refactor|update", "specific_changes": ["change description"]}}
+        - **Other agents**: Provide relevant context and parameters
+        
         **RESPONSE FORMAT:**
         Your response must be a single JSON object with these exact keys:
         {{
@@ -529,10 +557,12 @@ class InterAgentRouter:
             "confidence": 0.9,
             "reasoning": "Why this agent can directly handle the user's request",
             "goal_for_agent": "Specific, actionable goal with hints about what work is expected",
-            "recommended_inputs": {{"work_type": "specific_hint", "quality": "fast|decent|production"}},
+            "recommended_inputs": {{"structured_inputs_based_on_agent_type": "see_guidance_above"}},
             "is_completion": false,
             "completion_summary": ""
         }}
+        
+        **IMPORTANT**: For ExecutorAgent, always provide specific commands in recommended_inputs when shell operations are needed.
         
         Route efficiently to the agent that can directly accomplish the user's goal.
         """

@@ -621,7 +621,7 @@ def parse_command_output(result: CommandResult) -> Dict[str, Any]:
 
 
 # Compatibility function for original shell.py interface
-def execute_shell_command(command: str, working_dir: str) -> Dict[str, Any]:
+def execute_shell_command(command: str, working_dir: str, env: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
     """
     Backward compatibility function for the original shell.py interface.
     
@@ -632,6 +632,7 @@ def execute_shell_command(command: str, working_dir: str) -> Dict[str, Any]:
         command=command,
         working_directory=working_dir,
         timeout=120,
+        environment_vars=env,
         shell=True
     )
     
