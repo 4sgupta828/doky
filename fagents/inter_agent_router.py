@@ -119,10 +119,14 @@ class InterAgentRouter:
         logger.info(f"User goal: {user_goal}")
         
         try:
-            # Always start with AnalystAgent if no previous executions
-            current_agent = "AnalystAgent"
-            current_inputs = initial_inputs
-            current_goal = f"Analyze and understand: {user_goal}"
+            # Intelligently determine the first agent based on user goal
+            first_agent_decision = self._determine_first_agent(user_goal, initial_inputs, global_context)
+            current_agent = first_agent_decision.agent_name
+            current_inputs = first_agent_decision.recommended_inputs
+            current_goal = first_agent_decision.goal_for_agent
+            
+            logger.info(f"Initial routing decision: {current_agent} (confidence: {first_agent_decision.confidence:.2f})")
+            logger.info(f"Reasoning: {first_agent_decision.reasoning}")
             
             while (workflow_context.current_hop < max_hops and 
                    workflow_context.status == WorkflowStatus.IN_PROGRESS):
@@ -423,6 +427,129 @@ class InterAgentRouter:
             is_completion=bool(response_data.get("is_completion", False)),
             completion_summary=response_data.get("completion_summary", "")
         )
+    
+    def _determine_first_agent(self, user_goal: str, initial_inputs: Dict[str, Any], 
+                              global_context: GlobalContext) -> NextAgentDecision:
+        """Determine which agent should handle the user's request initially."""
+        
+        if not self.llm_client:
+            raise RuntimeError(
+                "LLM client is required for first agent routing. "
+                "No fallback routing available - please ensure OpenAI LLM Tool is properly configured."
+            )
+        
+        try:
+            # Build context for initial routing decision
+            prompt = self._build_first_agent_prompt(user_goal, initial_inputs, global_context)
+            
+            # Get LLM response
+            response_str = self.llm_client.invoke(prompt)
+            response_data = json.loads(response_str)
+            
+            # Parse and validate response
+            return self._parse_next_agent_decision(response_data, None)
+            
+        except Exception as e:
+            logger.error(f"First agent routing failed: {e}")
+            # Fallback to AnalystAgent if routing fails
+            logger.warning("Falling back to AnalystAgent for initial routing")
+            return NextAgentDecision(
+                agent_name="AnalystAgent",
+                confidence=0.3,
+                reasoning=f"Fallback routing due to error: {e}",
+                recommended_inputs=initial_inputs,
+                goal_for_agent=f"Analyze and understand: {user_goal}",
+                is_completion=False
+            )
+    
+    def _build_first_agent_prompt(self, user_goal: str, initial_inputs: Dict[str, Any], 
+                                 global_context: GlobalContext) -> str:
+        """Build the LLM prompt for determining the first agent to invoke."""
+        
+        # Get agent capabilities
+        agent_capabilities = self._get_agent_capabilities()
+        
+        # Get workspace context
+        workspace_files = global_context.workspace.list_files() if global_context.workspace else []
+        workspace_context = f"Workspace files: {len(workspace_files)} files" if workspace_files else "No workspace"
+        
+        # Format initial inputs
+        inputs_summary = self._format_inputs_summary(initial_inputs)
+        
+        return f"""
+        You are the Initial Routing Intelligence for a foundational agent system.
+        
+        Your task is to determine which foundational agent should handle the user's request directly,
+        making the most EFFICIENT routing decision without unnecessary analysis steps.
+        
+        **USER'S REQUEST:** "{user_goal}"
+        
+        **AVAILABLE INPUTS:**
+        {inputs_summary}
+        
+        **WORKSPACE CONTEXT:**
+        {workspace_context}
+        
+        **AVAILABLE FOUNDATIONAL AGENTS:**
+        {json.dumps(agent_capabilities, indent=2)}
+        
+        **EFFICIENT ROUTING PRINCIPLES:**
+        1. **Direct Action**: If the request is clear and actionable, route directly to the appropriate agent
+        2. **Minimal Hops**: Avoid analysis unless the request is genuinely unclear or complex
+        3. **Intent Recognition**: Recognize clear intent patterns and route accordingly
+        4. **Analysis Only When Needed**: Only route to AnalystAgent if understanding is actually required
+        
+        **ROUTING PATTERNS:**
+        - **"write/create/build/implement"** → CreatorAgent (for code, tests, docs, projects)
+        - **"fix/debug/troubleshoot"** → DebuggingAgent or SurgeonAgent  
+        - **"run/test/execute/validate"** → ExecutorAgent
+        - **"plan/organize/coordinate"** → StrategistAgent
+        - **"analyze/understand/explain"** → AnalystAgent
+        - **"modify/update/change"** → SurgeonAgent
+        
+        **ANALYSIS ROUTING CRITERIA** (use AnalystAgent only if):
+        - Request is genuinely unclear or ambiguous
+        - Need to understand existing complex codebase before acting
+        - Debugging complex system issues requiring investigation
+        - User explicitly asks for analysis/understanding
+        
+        **TARGET AGENT HINTS:**
+        Provide specific hints to the target agent about what type of work is expected:
+        - For CreatorAgent: specify what to create (code/tests/docs) and quality level
+        - For ExecutorAgent: specify what to run/execute/validate
+        - For DebuggingAgent: specify what issue to debug
+        - For SurgeonAgent: specify what to modify/fix
+        - For StrategistAgent: specify what to plan/coordinate
+        - For AnalystAgent: specify what to analyze and why
+        
+        **RESPONSE FORMAT:**
+        Your response must be a single JSON object with these exact keys:
+        {{
+            "agent_name": "AnalystAgent|StrategistAgent|CreatorAgent|SurgeonAgent|ExecutorAgent|DebuggingAgent",
+            "confidence": 0.9,
+            "reasoning": "Why this agent can directly handle the user's request",
+            "goal_for_agent": "Specific, actionable goal with hints about what work is expected",
+            "recommended_inputs": {{"work_type": "specific_hint", "quality": "fast|decent|production"}},
+            "is_completion": false,
+            "completion_summary": ""
+        }}
+        
+        Route efficiently to the agent that can directly accomplish the user's goal.
+        """
+    
+    def _format_inputs_summary(self, inputs: Dict[str, Any]) -> str:
+        """Format inputs for prompt context."""
+        if not inputs:
+            return "No inputs provided"
+        
+        summary_lines = []
+        for key, value in inputs.items():
+            if isinstance(value, (dict, list)) and len(str(value)) > 100:
+                summary_lines.append(f"- {key}: {type(value).__name__} (length: {len(value)})")
+            else:
+                summary_lines.append(f"- {key}: {value}")
+        
+        return "\n".join(summary_lines)
     
 
 

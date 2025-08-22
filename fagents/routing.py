@@ -143,9 +143,9 @@ class LLMRouter:
         inputs_summary = self._format_inputs_summary(context.inputs)
         
         return f"""
-        You are the routing intelligence for the AnalystAgent, a foundational agent specialized in deep comprehension and diagnosis.
+        You are the routing intelligence for the AnalystAgent, a foundational agent specialized in thorough analysis when understanding is genuinely needed.
         
-        Your task is to determine which specific analysis operation will make the most directional progress toward the user's goal.
+        Since you've been routed here, analysis is required. Your task is to determine which specific analysis operation will provide the most valuable insights to enable effective subsequent actions.
         
         **User Goal:** "{context.goal}"
         
@@ -156,36 +156,43 @@ class LLMRouter:
         {workspace_context}
         
         **Available Analysis Operations:**
-        - **code_analysis**: Analyze code syntax, imports, structure, and validate Python code
-        - **environment_analysis**: Analyze development environment, dependencies, system state
-        - **problem_analysis**: Diagnose problems, errors, failures, and root cause analysis
-        - **quality_analysis**: Assess code quality, security vulnerabilities, and maintainability
-        - **comprehensive_analysis**: Run multiple relevant analyses for complete assessment
+        - **code_analysis**: Deep code analysis - syntax, imports, structure, patterns, and validation
+        - **environment_analysis**: Environment assessment - dependencies, system state, configuration
+        - **problem_analysis**: Systematic problem diagnosis - errors, failures, root cause analysis
+        - **quality_analysis**: Code quality assessment - security, maintainability, best practices
+        - **comprehensive_analysis**: Multi-faceted analysis when thorough understanding is needed
         
-        **Decision Criteria:**
-        1. **Directional Progress**: Which operation moves closest to solving the user's actual need?
-        2. **Input Alignment**: Which operation best utilizes the available inputs?
-        3. **Goal Clarity**: Which operation provides the clearest path to actionable results?
-        4. **User Value**: Which operation delivers the most immediate value to the user?
+        **ANALYSIS DEPTH PRINCIPLES:**
+        1. **Thorough Investigation**: Since analysis is needed, be comprehensive enough to enable action
+        2. **Actionable Insights**: Focus on analysis that will inform downstream agent decisions
+        3. **Context-Aware**: Consider what subsequent agents will need from your analysis
+        4. **Problem-Solving Oriented**: Analyze to solve, not just to understand
+        5. **Quality Over Speed**: Better to do thorough analysis once than surface analysis multiple times
         
-        **Critical Instructions:**
-        - Choose the operation that makes the most DIRECT progress toward the goal
-        - If multiple operations could help, choose the most specific and actionable one
-        - If the goal involves error diagnosis or debugging, favor problem_analysis
-        - If the goal involves code validation or syntax checking, favor code_analysis
-        - If the goal involves security or quality concerns, favor quality_analysis
-        - If the goal is broad or unclear, favor comprehensive_analysis
+        **Decision Guidelines:**
+        - **code_analysis**: When specific code issues, syntax, or structure need investigation
+        - **environment_analysis**: When environment, dependencies, or setup is the bottleneck
+        - **problem_analysis**: When debugging, error diagnosis, or failure investigation is needed
+        - **quality_analysis**: When code quality, security, or maintainability assessment is required
+        - **comprehensive_analysis**: When multiple aspects need investigation or situation is complex
+        
+        **COMPREHENSIVE ANALYSIS INDICATORS:**
+        Use comprehensive_analysis when:
+        - The goal involves understanding a complex, unfamiliar system
+        - Multiple analysis types would provide valuable insights
+        - The downstream task requires broad understanding
+        - The situation is genuinely complex and multi-faceted
         
         **Response Format:**
         Your response must be a single JSON object with these exact keys:
         {{
             "decision": "code_analysis|environment_analysis|problem_analysis|quality_analysis|comprehensive_analysis",
-            "confidence": 0.8,
-            "reasoning": "Clear explanation of why this operation makes the most directional progress",
-            "recommended_inputs": {{"key": "value"}}
+            "confidence": 0.85,
+            "reasoning": "Clear explanation of why this analysis will provide actionable insights for subsequent agents",
+            "recommended_inputs": {{"depth": "thorough", "focus": "actionable_insights"}}
         }}
         
-        Analyze the goal and context, then provide your routing decision.
+        Choose the analysis that will best inform and enable effective subsequent actions.
         """
     
     def _build_creator_routing_prompt(self, context: RoutingContext) -> str:
