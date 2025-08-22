@@ -360,6 +360,8 @@ class InterAgentRouter:
         
         - **CreatorAgent**: For content creation, provide structured inputs based on creation type:
           
+          **CRITICAL**: Always provide "creation_type" to guide CreatorAgent's execution strategy:
+          
           For **test creation**:
           {{"creation_type": "tests", "test_type": "unit|integration|cli|api|performance", "test_framework": "pytest|unittest|jest", "test_quality": "fast|decent|production", "target_files": ["file1.py"], "requirements": ["test requirement 1", "test requirement 2"]}}
           
@@ -369,10 +371,13 @@ class InterAgentRouter:
           For **documentation creation**:
           {{"creation_type": "documentation", "doc_type": "readme|api_doc|user_guide|technical_spec", "format": "markdown|html|rst", "requirements": ["doc requirement 1", "doc requirement 2"]}}
           
-          For **full project creation** (multi-file applications with structure, config, tests, docs):
-          {{"creation_type": "project", "project_type": "library|cli_app|web_app|api", "language": "python|javascript|java", "structure": ["component1", "component2"], "requirements": ["project requirement 1", "project requirement 2"]}}
+          For **specification creation**:
+          {{"creation_type": "specification", "spec_type": "technical|functional|api", "requirements": ["requirement 1", "requirement 2"]}}
           
-          **CRITICAL**: Use "code" creation for simple requests like "write a program/script to X". Use "project" only when explicitly requiring structured applications with multiple components.
+          For **full project creation** (multi-file applications with structure, config, tests, docs):
+          {{"creation_type": "full_project", "project_type": "library|cli_app|web_app|api", "language": "python|javascript|java", "structure": ["component1", "component2"], "requirements": ["project requirement 1", "project requirement 2"]}}
+          
+          **GUIDANCE**: Use "code" creation for simple requests like "write a program/script to X". Use "full_project" only when explicitly requiring structured applications with multiple components.
         
         - **SurgeonAgent**: For modifications, provide:
           {{"target_files": ["file1.py", "file2.py"], "operation": "fix|refactor|update", "specific_changes": ["change description"]}}
@@ -672,6 +677,8 @@ class InterAgentRouter:
           - false: Simple single-purpose execution
         - **CreatorAgent**: For content creation, provide structured inputs based on creation type:
           
+          **CRITICAL**: Always provide "creation_type" to guide CreatorAgent's execution strategy:
+          
           For **test creation**:
           {{"creation_type": "tests", "test_type": "unit|integration|cli|api|performance", "test_framework": "pytest|unittest|jest", "test_quality": "fast|decent|production", "target_files": ["file1.py"], "requirements": ["test requirement 1", "test requirement 2"]}}
           
@@ -681,10 +688,13 @@ class InterAgentRouter:
           For **documentation creation**:
           {{"creation_type": "documentation", "doc_type": "readme|api_doc|user_guide|technical_spec", "format": "markdown|html|rst", "requirements": ["doc requirement 1", "doc requirement 2"]}}
           
-          For **full project creation** (multi-file applications with structure, config, tests, docs):
-          {{"creation_type": "project", "project_type": "library|cli_app|web_app|api", "language": "python|javascript|java", "structure": ["component1", "component2"], "requirements": ["project requirement 1", "project requirement 2"]}}
+          For **specification creation**:
+          {{"creation_type": "specification", "spec_type": "technical|functional|api", "requirements": ["requirement 1", "requirement 2"]}}
           
-          **CRITICAL**: Use "code" creation for simple requests like "write a program/script to X". Use "project" only when explicitly requiring structured applications with multiple components.
+          For **full project creation** (multi-file applications with structure, config, tests, docs):
+          {{"creation_type": "full_project", "project_type": "library|cli_app|web_app|api", "language": "python|javascript|java", "structure": ["component1", "component2"], "requirements": ["project requirement 1", "project requirement 2"]}}
+          
+          **GUIDANCE**: Use "code" creation for simple requests like "write a program/script to X". Use "full_project" only when explicitly requiring structured applications with multiple components.
         - **SurgeonAgent**: For modifications, provide:
           {{"target_files": ["file1.py"], "operation": "fix|refactor|update", "specific_changes": ["change description"]}}
         - **Other agents**: Provide relevant context and parameters

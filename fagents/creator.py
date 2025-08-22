@@ -41,8 +41,8 @@ from tools.manifest_generation_tools import (
     generate_manifest, ManifestContext, ProjectType, ProjectStructure
 )
 
-# LLM-based routing
-from .routing import LLMRouter, create_routing_context, RoutingDecision
+# LLM-based routing (kept for potential future use, but not actively used in main execution path)
+from .routing import LLMRouter
 
 logger = logging.getLogger(__name__)
 
@@ -74,7 +74,7 @@ class CreatorAgent(FoundationalAgent):
             description="Foundational agent for generating code, tests, documentation, specifications, and project structures"
         )
         self.llm_client = llm_client
-        self.router = LLMRouter(llm_client)
+        # Note: Removed LLMRouter - InterAgentRouter now provides creation_type directly
 
     def get_capabilities(self) -> List[str]:
         """Return list of creation capabilities."""
@@ -102,37 +102,20 @@ class CreatorAgent(FoundationalAgent):
         self.report_progress("Starting creation task", goal)
         
         try:
-            # Use LLM-based routing to determine creation type
-            workspace_files = global_context.workspace.list_files() if global_context.workspace else []
-            routing_context = create_routing_context(
-                agent_type="CreatorAgent",
-                goal=goal,
-                inputs=inputs,
-                workspace_files=workspace_files,
-                available_capabilities=self.get_capabilities()
-            )
-            
-            routing_result = self.router.route_request(routing_context)
-            
-            # Map routing decision to CreationType
-            creation_type_mapping = {
-                RoutingDecision.CODE_CREATION: CreationType.CODE,
-                RoutingDecision.TEST_CREATION: CreationType.TESTS,
-                RoutingDecision.DOCUMENTATION_CREATION: CreationType.DOCUMENTATION,
-                RoutingDecision.SPECIFICATION_CREATION: CreationType.SPECIFICATION,
-                RoutingDecision.MANIFEST_CREATION: CreationType.MANIFEST,
-                RoutingDecision.FULL_PROJECT_CREATION: CreationType.FULL_PROJECT,
-            }
-            
-            creation_type = creation_type_mapping.get(routing_result.decision, CreationType.CODE)
-            
-            # Apply LLM-recommended quality level to inputs
-            if routing_result.recommended_inputs.get("quality"):
-                inputs["quality"] = routing_result.recommended_inputs["quality"]
-            
-            self.report_progress("Creation type determined via LLM routing", 
-                               f"{creation_type.value} (confidence: {routing_result.confidence:.2f})")
-            logger.info(f"LLM routing reasoning: {routing_result.reasoning}")
+            # PRIMARY: Trust InterAgentRouter's creation_type decision
+            creation_type_str = inputs.get("creation_type")
+            if creation_type_str:
+                try:
+                    creation_type = CreationType(creation_type_str)
+                    self.report_progress("Creation type determined by InterAgentRouter", f"{creation_type.value}")
+                    logger.info(f"Using InterAgentRouter creation_type: {creation_type.value}")
+                except ValueError:
+                    logger.warning(f"Invalid creation_type from InterAgentRouter: {creation_type_str}, falling back")
+                    creation_type = self._determine_creation_type_fallback(goal, inputs)
+            else:
+                # FALLBACK: Simple heuristics for backward compatibility (no complex LLM routing)
+                creation_type = self._determine_creation_type_fallback(goal, inputs)
+                logger.info(f"Creation type determined via fallback heuristics: {creation_type.value}")
             
             if creation_type == CreationType.CODE:
                 return self._handle_code_generation(goal, inputs, global_context)
@@ -159,37 +142,37 @@ class CreatorAgent(FoundationalAgent):
                 message=f"Creation failed: {str(e)}"
             )
 
-    def _determine_creation_type(self, goal: str, inputs: Dict[str, Any]) -> CreationType:
-        """Determine the type of creation based on goal and inputs."""
+    def _determine_creation_type_fallback(self, goal: str, inputs: Dict[str, Any]) -> CreationType:
+        """
+        Simple fallback creation type detection for backward compatibility.
+        
+        Uses basic keyword detection - much simpler than the original complex heuristics.
+        Primary detection should come from InterAgentRouter's creation_type flag.
+        """
+        
+        if not goal:
+            return CreationType.CODE
+        
         goal_lower = goal.lower()
         
-        # Check for specific keywords and input types
-        if any(word in goal_lower for word in ["test", "unit test", "integration test", "cli test"]):
+        # Very basic keyword detection (simplified from original complex logic)
+        if "test" in goal_lower:
             return CreationType.TESTS
-        elif any(word in goal_lower for word in ["documentation", "readme", "api doc", "user guide"]):
+        elif any(word in goal_lower for word in ["documentation", "readme", "doc"]):
             return CreationType.DOCUMENTATION
-        elif any(word in goal_lower for word in ["specification", "spec", "technical spec", "requirements"]):
+        elif any(word in goal_lower for word in ["specification", "spec"]):
             return CreationType.SPECIFICATION
-        elif any(word in goal_lower for word in ["manifest", "file structure", "project structure"]):
-            return CreationType.MANIFEST
-        elif any(word in goal_lower for word in ["full project", "complete project", "scaffold"]):
+        elif "project" in goal_lower and any(word in goal_lower for word in ["full", "complete", "scaffold"]):
             return CreationType.FULL_PROJECT
-        elif any(word in goal_lower for word in ["code", "function", "class", "module", "implement"]):
-            return CreationType.CODE
         
-        # Check inputs for type hints
-        if "test_type" in inputs or "test_framework" in inputs:
+        # Simple input-based detection
+        if inputs.get("test_type") or inputs.get("test_framework"):
             return CreationType.TESTS
-        elif "doc_type" in inputs or "documentation_type" in inputs:
+        elif inputs.get("doc_type"):
             return CreationType.DOCUMENTATION
-        elif "requirements" in inputs and "clarified_requirements" in inputs:
-            return CreationType.SPECIFICATION
-        elif "technical_spec" in inputs and "file_manifest" not in inputs:
-            return CreationType.MANIFEST
-        elif "code_requirements" in inputs or "function_signature" in inputs:
-            return CreationType.CODE
         
-        # Default to code generation
+        # Default to code generation (most common case)
+        logger.info("Fallback creation type detection: defaulting to CODE")
         return CreationType.CODE
 
     def _handle_code_generation(self, goal: str, inputs: Dict[str, Any], global_context: GlobalContext) -> AgentResult:
@@ -522,8 +505,182 @@ class CreatorAgent(FoundationalAgent):
             return AgentResult(success=False, message=result.message)
 
     def _handle_full_project_creation(self, goal: str, inputs: Dict[str, Any], global_context: GlobalContext) -> AgentResult:
-        """Handle full project creation by orchestrating multiple creation tasks."""
+        """Handle full project creation by delegating to workflow orchestration tools."""
         self.report_progress("Creating full project", f"Goal: {goal}")
+        
+        try:
+            # Delegate complex multi-step project creation to workflow orchestration
+            return self._delegate_to_creation_orchestration(goal, inputs, global_context)
+            
+        except Exception as e:
+            return AgentResult(
+                success=False,
+                message=f"Failed to create full project: {str(e)}"
+            )
+
+    # ====== CREATION WORKFLOW ORCHESTRATION ======
+    
+    def _delegate_to_creation_orchestration(self, goal: str, inputs: Dict[str, Any], 
+                                          global_context: GlobalContext) -> AgentResult:
+        """Delegate complex multi-step creation workflows to existing orchestration tools."""
+        logger.info(f"Delegating multi-step creation workflow to orchestration tools: {goal[:100]}...")
+        
+        try:
+            # Import orchestration tools
+            from tools.workflow_orchestration_tools import (
+                orchestrate_workflow, create_orchestration_context
+            )
+            from core.models import TaskGraph, TaskNode
+            import time
+            
+            # Define creation workflow steps
+            creation_steps = self._plan_creation_workflow_steps(goal, inputs)
+            
+            if not creation_steps:
+                return AgentResult(
+                    success=False,
+                    message="Multi-step creation workflow detected but no steps could be planned",
+                    error_details={"goal": goal, "inputs_keys": list(inputs.keys())}
+                )
+            
+            # Convert creation steps to TaskGraph
+            task_graph = self._create_creation_task_graph(creation_steps, goal)
+            
+            # Create orchestration context
+            orchestration_context = create_orchestration_context(
+                workflow_id=f"creator_workflow_{int(time.time())}",
+                orchestration_mode="sequential",  # Creation steps are typically sequential
+                max_parallel_tasks=1,  # CreatorAgent workflows are sequential
+                error_handling="stop",  # Stop on first failure for creation tasks
+                global_context=global_context
+            )
+            
+            # Create mini agent registry for creation execution
+            creation_agent_registry = {
+                "CreationExecutor": self  # Use CreatorAgent itself for creation execution
+            }
+            
+            # Execute workflow using existing orchestration tools
+            orchestration_result = orchestrate_workflow(
+                task_graph=task_graph,
+                agent_registry=creation_agent_registry,
+                context=orchestration_context
+            )
+            
+            # Convert orchestration result to AgentResult
+            success = orchestration_result.success
+            message = self._create_creation_orchestration_message(orchestration_result, goal)
+            
+            outputs = {
+                "orchestration_type": "delegated_creation_workflow",
+                "workflow_id": orchestration_result.workflow_id,
+                "total_steps": orchestration_result.total_steps,
+                "completed_steps": orchestration_result.completed_steps,
+                "failed_steps": orchestration_result.failed_steps,
+                "duration_seconds": orchestration_result.total_duration_seconds,
+                "final_outputs": orchestration_result.final_outputs,
+                "creation_goal": goal,
+                "tool_used": "workflow_orchestration_tools"
+            }
+            
+            return AgentResult(
+                success=success,
+                message=message,
+                outputs=outputs
+            )
+            
+        except ImportError as e:
+            logger.warning(f"Workflow orchestration tools not available: {e}. Falling back to internal orchestration.")
+            # Fallback to internal orchestration if orchestration tools unavailable
+            return self._handle_full_project_creation_internal(goal, inputs, global_context)
+        except Exception as e:
+            logger.error(f"Creation workflow orchestration failed: {e}", exc_info=True)
+            return AgentResult(
+                success=False,
+                message=f"Creation workflow orchestration failed: {e}",
+                error_details={
+                    "exception": str(e),
+                    "goal": goal,
+                    "fallback": "Consider using internal creation orchestration"
+                }
+            )
+    
+    def _plan_creation_workflow_steps(self, goal: str, inputs: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Plan the creation workflow steps for full project creation."""
+        
+        steps = []
+        
+        # Step 1: Create specification if requirements provided
+        if "requirements" in inputs and "technical_spec" not in inputs:
+            steps.append({
+                "step_name": "specification_creation",
+                "goal": "Create technical specification from requirements",
+                "creation_type": "specification",
+                "inputs": {"requirements": inputs["requirements"]}
+            })
+        
+        # Step 2: Create project manifest
+        steps.append({
+            "step_name": "manifest_planning",
+            "goal": "Plan project structure and file manifest",
+            "creation_type": "manifest",
+            "inputs": {"technical_spec": inputs.get("technical_spec", goal)}
+        })
+        
+        # Step 3: Generate core code files
+        steps.append({
+            "step_name": "code_generation", 
+            "goal": "Generate core application code",
+            "creation_type": "code",
+            "inputs": {"code_requirements": inputs.get("technical_spec", goal)}
+        })
+        
+        # Step 4: Generate tests
+        steps.append({
+            "step_name": "test_generation",
+            "goal": "Generate tests for core code",
+            "creation_type": "tests",
+            "inputs": {"test_type": "unit", "test_framework": "pytest"}
+        })
+        
+        return steps
+    
+    def _create_creation_task_graph(self, creation_steps: List[Dict[str, Any]], goal: str) -> 'TaskGraph':
+        """Convert creation steps into a TaskGraph for orchestration."""
+        from core.models import TaskGraph, TaskNode
+        
+        # Create task nodes for each creation step
+        nodes = {}
+        
+        for i, step in enumerate(creation_steps):
+            task_id = f"step_{i+1}_{step['step_name']}"
+            
+            # Create task node
+            task_node = TaskNode(
+                task_id=task_id,
+                goal=step['goal'],
+                assigned_agent="CreationExecutor",
+                dependencies=[] if i == 0 else [f"step_{i}_{creation_steps[i-1]['step_name']}"]  # Sequential dependency
+            )
+            
+            nodes[task_id] = task_node
+        
+        return TaskGraph(nodes=nodes)
+    
+    def _create_creation_orchestration_message(self, orchestration_result, goal: str) -> str:
+        """Create message from creation orchestration result."""
+        if orchestration_result.success:
+            return (f"✅ Multi-step creation workflow completed successfully: {orchestration_result.completed_steps}/"
+                   f"{orchestration_result.total_steps} creation steps completed in "
+                   f"{orchestration_result.total_duration_seconds:.2f}s for '{goal}'")
+        else:
+            return (f"⚠️ Multi-step creation workflow completed with issues: {orchestration_result.completed_steps}/"
+                   f"{orchestration_result.total_steps} steps completed, "
+                   f"{orchestration_result.failed_steps} failed. Errors: {orchestration_result.error_summary}")
+    
+    def _handle_full_project_creation_internal(self, goal: str, inputs: Dict[str, Any], global_context: GlobalContext) -> AgentResult:
+        """Fallback internal orchestration for full project creation (kept for backward compatibility)."""
+        logger.info("Using internal creation orchestration as fallback")
         
         try:
             # Step 1: Create specification if requirements provided
@@ -565,14 +722,14 @@ class CreatorAgent(FoundationalAgent):
             
             return AgentResult(
                 success=True,
-                message="Successfully created full project scaffold",
+                message="Successfully created full project scaffold (internal orchestration)",
                 outputs=project_outputs
             )
             
         except Exception as e:
             return AgentResult(
                 success=False,
-                message=f"Failed to create full project: {str(e)}"
+                message=f"Internal project creation failed: {str(e)}"
             )
 
     def required_inputs(self) -> List[str]:
