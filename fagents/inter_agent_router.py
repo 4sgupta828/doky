@@ -277,7 +277,12 @@ class InterAgentRouter:
                 raise
             
             # Parse and validate response
-            return self._parse_next_agent_decision(response_data, workflow_context)
+            decision = self._parse_next_agent_decision(response_data, workflow_context)
+            
+            # ANTI-LOOP PROTECTION: Check for consecutive same-agent calls
+            decision = self._apply_anti_loop_protection(decision, workflow_context)
+            
+            return decision
             
         except Exception as e:
             logger.error(f"LLM-based next agent decision failed: {e}")
@@ -344,8 +349,14 @@ class InterAgentRouter:
         When routing to specific agents, provide structured inputs in recommended_inputs:
         
         - **ExecutorAgent**: For shell operations, provide:
-          {{"commands": ["command1", "command2"], "working_directory": "/path", "purpose": "description"}}
-          Example Git setup: {{"commands": ["git init", "git config user.name 'Agent User'", "git config user.email 'agent@example.com'"], "working_directory": "{str(global_context.workspace_path)}", "purpose": "Git repository initialization"}}
+          {{"commands": ["command1", "command2"], "working_directory": "/path", "purpose": "description", "orchestration_required": true/false}}
+          
+          **CRITICAL**: Set "orchestration_required" based on workflow complexity:
+          - true: Multi-step workflows requiring environment setup → dependencies → execution → verification
+          - false: Simple single-purpose execution (e.g., run one test, execute one script)
+          
+          Example complex workflow: {{"commands": ["python -m venv venv", "pip install deps", "python script.py", "verify output"], "orchestration_required": true}}
+          Example simple execution: {{"commands": ["python test.py"], "orchestration_required": false}}
         
         - **CreatorAgent**: For content creation, provide structured inputs based on creation type:
           
@@ -372,11 +383,17 @@ class InterAgentRouter:
         If you believe the user's goal has been substantially completed based on the execution history
         and accumulated outputs, set "is_completion" to true and route to AnalystAgent for final validation.
         
+        **ANTI-LOOP PROTECTION:**
+        - If the same agent has been called multiple times in a row with similar goals, consider routing to a different agent
+        - If ExecutorAgent has already been successful but the goal is still incomplete, consider routing to AnalystAgent for validation or completion assessment
+        - Avoid routing to the same agent type more than 2 times consecutively unless there is clear progress and different sub-tasks
+        
         **CRITICAL INSTRUCTIONS:**
         - Analyze what has been done vs. what remains to achieve the user's goal
         - Choose the agent that makes the most direct progress toward completion
         - Provide specific, actionable goals for the next agent
         - If multiple agents could help, choose the one that advances the workflow most significantly
+        - AVOID REPEATED CALLS to the same agent unless there is clear, different work to be done
         
         **RESPONSE FORMAT:**
         Your response must be a single JSON object with these exact keys:
@@ -489,6 +506,57 @@ class InterAgentRouter:
             is_completion=bool(response_data.get("is_completion", False)),
             completion_summary=response_data.get("completion_summary", "")
         )
+
+    def _apply_anti_loop_protection(self, decision: NextAgentDecision, 
+                                   workflow_context: WorkflowContext) -> NextAgentDecision:
+        """Apply anti-loop protection to prevent infinite agent loops."""
+        
+        if not workflow_context.execution_history:
+            return decision  # No history to check
+        
+        # Check for consecutive same-agent executions
+        recent_agents = [ex.agent_name for ex in workflow_context.execution_history[-3:]]  # Last 3 executions
+        consecutive_count = 0
+        
+        # Count consecutive occurrences of the proposed agent
+        for agent_name in reversed(recent_agents):
+            if agent_name == decision.agent_name:
+                consecutive_count += 1
+            else:
+                break
+        
+        # If the same agent has been called 2+ times consecutively, trigger protection
+        if consecutive_count >= 2:
+            logger.warning(
+                f"ANTI-LOOP PROTECTION: {decision.agent_name} called {consecutive_count} times consecutively. "
+                f"Recent agents: {recent_agents}. Routing to AnalystAgent for validation."
+            )
+            
+            # Override decision to route to AnalystAgent for validation
+            return NextAgentDecision(
+                agent_name="AnalystAgent",
+                confidence=0.8,
+                reasoning=(
+                    f"Anti-loop protection triggered: {decision.agent_name} was called {consecutive_count} "
+                    f"times consecutively. Routing to AnalystAgent to assess progress and determine if "
+                    f"the user's goal has been completed or needs a different approach."
+                ),
+                recommended_inputs={
+                    "validation_type": "workflow_progress",
+                    "previous_agent": decision.agent_name,
+                    "consecutive_calls": consecutive_count,
+                    "user_goal": workflow_context.user_goal
+                },
+                goal_for_agent=(
+                    f"Assess workflow progress and determine if '{workflow_context.user_goal}' has been "
+                    f"completed or needs a different approach after {consecutive_count} consecutive "
+                    f"{decision.agent_name} executions"
+                ),
+                is_completion=False,
+                completion_summary=""
+            )
+        
+        return decision  # No protection needed
     
     def _determine_first_agent(self, user_goal: str, initial_inputs: Dict[str, Any], 
                               global_context: GlobalContext) -> NextAgentDecision:
@@ -597,7 +665,11 @@ class InterAgentRouter:
         Provide structured inputs in recommended_inputs based on target agent:
         
         - **ExecutorAgent**: For shell operations, provide:
-          {{"commands": ["command1", "command2"], "working_directory": "/path", "purpose": "description"}}
+          {{"commands": ["command1", "command2"], "working_directory": "/path", "purpose": "description", "orchestration_required": true/false}}
+          
+          **CRITICAL**: Set "orchestration_required" based on workflow complexity:
+          - true: Multi-step workflows requiring environment setup → dependencies → execution → verification  
+          - false: Simple single-purpose execution
         - **CreatorAgent**: For content creation, provide structured inputs based on creation type:
           
           For **test creation**:

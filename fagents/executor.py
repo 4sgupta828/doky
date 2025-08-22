@@ -146,10 +146,16 @@ class ExecutorAgent(FoundationalAgent):
         - "execute_command": Run shell commands
         - "manage_files": File operations
         - "setup_environment": Environment and dependency management
+        - Multi-step orchestration for complex workflows
         """
         logger.info(f"ExecutorAgent executing: '{goal}'")
         
         try:
+            # ENHANCED: Check if InterAgentRouter flagged this for orchestration
+            if inputs.get("orchestration_required"):
+                logger.info("InterAgentRouter flagged orchestration_required=True - delegating to workflow orchestration tools")
+                return self._delegate_to_workflow_orchestration(goal, inputs, global_context)
+            
             # Try LLM-based routing first if available
             if self._llm_client:
                 try:
@@ -508,6 +514,11 @@ class ExecutorAgent(FoundationalAgent):
     def _handle_environment_setup(self, goal: str, inputs: Dict[str, Any], global_context: GlobalContext) -> AgentResult:
         """Handle environment and dependency management operations."""
         logger.info("Handling environment setup and dependency management")
+        
+        # CRITICAL FIX: If commands are provided in inputs, this should be shell execution, not pure environment setup
+        if inputs.get("commands"):
+            logger.info("Commands detected in environment setup inputs - routing to shell execution")
+            return self._handle_shell_execution(goal, inputs, global_context)
         
         # Check if this is a Git repo initialization request
         if "init" in goal.lower() and "repo" in goal.lower():
@@ -1296,3 +1307,125 @@ class ExecutorAgent(FoundationalAgent):
                 message=f"Git repository setup failed: {e}",
                 error_details={"exception": str(e)}
             )
+
+    # ====== WORKFLOW ORCHESTRATION DELEGATION ======
+    
+    
+    def _delegate_to_workflow_orchestration(self, goal: str, inputs: Dict[str, Any], 
+                                          global_context: GlobalContext) -> AgentResult:
+        """Delegate complex multi-step workflows to existing orchestration tools."""
+        logger.info(f"Delegating multi-step workflow to orchestration tools: {goal[:100]}...")
+        
+        try:
+            # Import orchestration tools
+            from tools.workflow_orchestration_tools import (
+                orchestrate_workflow, create_orchestration_context, OrchestrationMode
+            )
+            from core.models import TaskGraph, TaskNode
+            
+            commands = inputs.get("commands", [])
+            working_directory = inputs.get("working_directory", str(global_context.workspace_path))
+            purpose = inputs.get("purpose", "Multi-step workflow execution")
+            
+            if not commands:
+                return AgentResult(
+                    success=False,
+                    message="Multi-step workflow detected but no commands provided",
+                    error_details={"goal": goal, "inputs_keys": list(inputs.keys())}
+                )
+            
+            # Convert commands to TaskGraph
+            task_graph = self._create_task_graph_from_commands(commands, goal, working_directory)
+            
+            # Create orchestration context
+            orchestration_context = create_orchestration_context(
+                workflow_id=f"executor_workflow_{int(time.time())}",
+                orchestration_mode="sequential",  # Commands are typically sequential
+                max_parallel_tasks=1,  # ExecutorAgent workflows are sequential
+                error_handling="stop",  # Stop on first failure for executor tasks
+                global_context=global_context
+            )
+            
+            # Create mini agent registry for shell execution
+            shell_agent_registry = {
+                "ShellExecutor": self  # Use ExecutorAgent itself for shell execution
+            }
+            
+            # Execute workflow using existing orchestration tools
+            orchestration_result = orchestrate_workflow(
+                task_graph=task_graph,
+                agent_registry=shell_agent_registry,
+                context=orchestration_context
+            )
+            
+            # Convert orchestration result to AgentResult
+            success = orchestration_result.success
+            message = self._create_orchestration_message(orchestration_result, purpose)
+            
+            outputs = {
+                "orchestration_type": "delegated_workflow",
+                "workflow_id": orchestration_result.workflow_id,
+                "total_steps": orchestration_result.total_steps,
+                "completed_steps": orchestration_result.completed_steps,
+                "failed_steps": orchestration_result.failed_steps,
+                "duration_seconds": orchestration_result.total_duration_seconds,
+                "final_outputs": orchestration_result.final_outputs,
+                "purpose": purpose,
+                "tool_used": "workflow_orchestration_tools"
+            }
+            
+            return AgentResult(
+                success=success,
+                message=message,
+                outputs=outputs
+            )
+            
+        except ImportError as e:
+            logger.warning(f"Workflow orchestration tools not available: {e}. Falling back to simple shell execution.")
+            # Fallback to simple shell execution if orchestration tools unavailable
+            return self._handle_shell_execution(goal, inputs, global_context)
+        except Exception as e:
+            logger.error(f"Workflow orchestration delegation failed: {e}", exc_info=True)
+            return AgentResult(
+                success=False,
+                message=f"Workflow orchestration failed: {e}",
+                error_details={
+                    "exception": str(e),
+                    "goal": goal,
+                    "fallback": "Consider using simple shell execution"
+                }
+            )
+    
+    def _create_task_graph_from_commands(self, commands: List[str], goal: str, 
+                                       working_directory: str) -> 'TaskGraph':
+        """Convert list of commands into a TaskGraph for orchestration."""
+        from core.models import TaskGraph, TaskNode
+        
+        # Create task nodes for each command
+        nodes = {}
+        
+        for i, command in enumerate(commands):
+            task_id = f"cmd_{i+1}"
+            
+            # Create task node
+            task_node = TaskNode(
+                task_id=task_id,
+                goal=f"Execute: {command}",
+                assigned_agent="ShellExecutor",
+                dependencies=[] if i == 0 else [f"cmd_{i}"]  # Sequential dependency
+            )
+            
+            nodes[task_id] = task_node
+        
+        return TaskGraph(nodes=nodes)
+    
+    def _create_orchestration_message(self, orchestration_result, purpose: str) -> str:
+        """Create message from orchestration result."""
+        if orchestration_result.success:
+            return (f"✅ Multi-step workflow completed successfully: {orchestration_result.completed_steps}/"
+                   f"{orchestration_result.total_steps} steps completed in "
+                   f"{orchestration_result.total_duration_seconds:.2f}s for {purpose}")
+        else:
+            return (f"⚠️ Multi-step workflow completed with issues: {orchestration_result.completed_steps}/"
+                   f"{orchestration_result.total_steps} steps completed, "
+                   f"{orchestration_result.failed_steps} failed. Errors: {orchestration_result.error_summary}")
