@@ -352,14 +352,16 @@ class InterAgentRouter:
           For **test creation**:
           {{"creation_type": "tests", "test_type": "unit|integration|cli|api|performance", "test_framework": "pytest|unittest|jest", "test_quality": "fast|decent|production", "target_files": ["file1.py"], "requirements": ["test requirement 1", "test requirement 2"]}}
           
-          For **code creation**:
-          {{"creation_type": "code", "language": "python|javascript|java", "code_type": "function|class|module|library", "file_path": "path/to/file", "requirements": ["code requirement 1", "code requirement 2"]}}
+          For **simple code creation** (single scripts, utilities, small programs):
+          {{"creation_type": "code", "language": "python|javascript|java", "code_type": "script|function|class|module", "file_path": "path/to/file", "requirements": ["code requirement 1", "code requirement 2"]}}
           
           For **documentation creation**:
           {{"creation_type": "documentation", "doc_type": "readme|api_doc|user_guide|technical_spec", "format": "markdown|html|rst", "requirements": ["doc requirement 1", "doc requirement 2"]}}
           
-          For **project creation**:
+          For **full project creation** (multi-file applications with structure, config, tests, docs):
           {{"creation_type": "project", "project_type": "library|cli_app|web_app|api", "language": "python|javascript|java", "structure": ["component1", "component2"], "requirements": ["project requirement 1", "project requirement 2"]}}
+          
+          **CRITICAL**: Use "code" creation for simple requests like "write a program/script to X". Use "project" only when explicitly requiring structured applications with multiple components.
         
         - **SurgeonAgent**: For modifications, provide:
           {{"target_files": ["file1.py", "file2.py"], "operation": "fix|refactor|update", "specific_changes": ["change description"]}}
@@ -601,14 +603,16 @@ class InterAgentRouter:
           For **test creation**:
           {{"creation_type": "tests", "test_type": "unit|integration|cli|api|performance", "test_framework": "pytest|unittest|jest", "test_quality": "fast|decent|production", "target_files": ["file1.py"], "requirements": ["test requirement 1", "test requirement 2"]}}
           
-          For **code creation**:
-          {{"creation_type": "code", "language": "python|javascript|java", "code_type": "function|class|module|library", "file_path": "path/to/file", "requirements": ["code requirement 1", "code requirement 2"]}}
+          For **simple code creation** (single scripts, utilities, small programs):
+          {{"creation_type": "code", "language": "python|javascript|java", "code_type": "script|function|class|module", "file_path": "path/to/file", "requirements": ["code requirement 1", "code requirement 2"]}}
           
           For **documentation creation**:
           {{"creation_type": "documentation", "doc_type": "readme|api_doc|user_guide|technical_spec", "format": "markdown|html|rst", "requirements": ["doc requirement 1", "doc requirement 2"]}}
           
-          For **project creation**:
+          For **full project creation** (multi-file applications with structure, config, tests, docs):
           {{"creation_type": "project", "project_type": "library|cli_app|web_app|api", "language": "python|javascript|java", "structure": ["component1", "component2"], "requirements": ["project requirement 1", "project requirement 2"]}}
+          
+          **CRITICAL**: Use "code" creation for simple requests like "write a program/script to X". Use "project" only when explicitly requiring structured applications with multiple components.
         - **SurgeonAgent**: For modifications, provide:
           {{"target_files": ["file1.py"], "operation": "fix|refactor|update", "specific_changes": ["change description"]}}
         - **Other agents**: Provide relevant context and parameters
