@@ -492,7 +492,14 @@ def discover_files(
                 # Apply exclusion patterns
                 skip = False
                 for exclude_pattern in exclude_patterns:
-                    if exclude_pattern in str(match):
+                    # Handle glob patterns (containing * or ?)
+                    if '*' in exclude_pattern or '?' in exclude_pattern:
+                        from fnmatch import fnmatch
+                        if fnmatch(match.name, exclude_pattern) or fnmatch(str(match.relative_to(Path(working_directory))), exclude_pattern):
+                            skip = True
+                            break
+                    # Handle simple string containment
+                    elif exclude_pattern in str(match):
                         skip = True
                         break
                 if skip:
@@ -719,3 +726,71 @@ def get_directory_size(
             operation=FileOperation.READ,
             error_details=str(e)
         )
+
+def discover_python_source_files(
+    search_path: str = ".",
+    exclude_test_files: bool = True,
+    working_directory: str = "."
+) -> Dict[str, str]:
+    """
+    Discover Python source files and return their content.
+    
+    This is a convenience function that combines file discovery with reading
+    for Python source files, specifically useful for test generation and code analysis.
+    
+    Args:
+        search_path: Path to search for Python files
+        exclude_test_files: Whether to exclude test files (test_*.py, *_test.py)
+        working_directory: Base directory for relative paths
+        
+    Returns:
+        Dict mapping relative file paths to their content
+    """
+    exclude_patterns = [
+        "__pycache__",
+        "*.pyc",
+        "*.pyo", 
+        ".git",
+        ".svn",
+        "node_modules",
+        ".pytest_cache",
+        ".mypy_cache",
+        "venv",
+        ".venv",
+        "env",
+        ".env"
+    ]
+    
+    if exclude_test_files:
+        exclude_patterns.extend(["test_*.py", "*_test.py"])
+    
+    # Discover Python files
+    discovery_result = discover_files(
+        search_path=search_path,
+        patterns=["*.py"],
+        exclude_patterns=exclude_patterns,
+        file_types=[FileType.PYTHON.value],
+        working_directory=working_directory
+    )
+    
+    if not discovery_result.success:
+        logger.warning(f"Failed to discover Python files: {discovery_result.message}")
+        return {}
+    
+    # Extract file paths from the result
+    if discovery_result.content:
+        file_paths = [line.strip() for line in discovery_result.content.split('\n') if line.strip()]
+    else:
+        file_paths = []
+    
+    # Read all discovered files
+    source_files = {}
+    for file_path in file_paths:
+        read_result = read_file(file_path, working_directory=working_directory)
+        if read_result.success:
+            source_files[file_path] = read_result.content
+        else:
+            logger.warning(f"Failed to read {file_path}: {read_result.message}")
+    
+    logger.info(f"Discovered and read {len(source_files)} Python source files")
+    return source_files

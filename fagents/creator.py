@@ -15,7 +15,7 @@ from technical specifications to actual code, tests, and documentation.
 """
 
 import logging
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List
 from enum import Enum
 
 from .base import FoundationalAgent
@@ -295,6 +295,12 @@ class CreatorAgent(FoundationalAgent):
             source_files_dict = code_to_test
         elif isinstance(code_to_test, str) and code_to_test.strip():
             source_files_dict = {"target_code.py": code_to_test}
+        elif not code_to_test and global_context.workspace_path:
+            # No specific code provided, discover Python files in workspace using shared tools
+            from tools.file_system_tools import discover_python_source_files
+            source_files_dict = discover_python_source_files(
+                working_directory=str(global_context.workspace_path)
+            )
         
         context = TestGenerationContext(
             goal=requirements,

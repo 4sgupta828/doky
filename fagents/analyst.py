@@ -175,8 +175,12 @@ class AnalystAgent(FoundationalAgent):
         # Get code files
         code_files = inputs.get("code_files", {})
         if not code_files and global_context.workspace_path:
-            # Auto-discover Python files
-            code_files = self._discover_python_files(global_context.workspace_path)
+            # Auto-discover Python files using shared tools
+            from tools.file_system_tools import discover_python_source_files
+            code_files = discover_python_source_files(
+                working_directory=str(global_context.workspace_path),
+                exclude_test_files=False  # AnalystAgent should analyze test files too
+            )
         
         if not code_files:
             return AgentResult(
@@ -346,7 +350,12 @@ class AnalystAgent(FoundationalAgent):
         # Get code files
         code_files = inputs.get("code_files", {})
         if not code_files and global_context.workspace_path:
-            code_files = self._discover_python_files(global_context.workspace_path)
+            # Auto-discover Python files using shared tools
+            from tools.file_system_tools import discover_python_source_files
+            code_files = discover_python_source_files(
+                working_directory=str(global_context.workspace_path),
+                exclude_test_files=False  # AnalystAgent should analyze test files too
+            )
         
         if not code_files:
             return AgentResult(
@@ -503,23 +512,6 @@ class AnalystAgent(FoundationalAgent):
             # Fall back to environment analysis
             return self._execute_environment_analysis(goal, inputs, global_context)
     
-    def _discover_python_files(self, workspace_path: Path) -> Dict[str, str]:
-        """Discover and read Python files in the workspace."""
-        code_files = {}
-        
-        try:
-            for py_file in Path(workspace_path).rglob("*.py"):
-                if py_file.is_file() and not str(py_file).startswith(str(workspace_path / "venv")):
-                    try:
-                        with open(py_file, 'r', encoding='utf-8') as f:
-                            code_files[str(py_file.relative_to(workspace_path))] = f.read()
-                    except Exception as e:
-                        self.logger.warning(f"Could not read {py_file}: {e}")
-                        
-        except Exception as e:
-            self.logger.warning(f"Error discovering Python files: {e}")
-            
-        return code_files
     
     def _generate_overall_assessment(self, comprehensive_results: Dict[str, Any]) -> Dict[str, Any]:
         """Generate an overall assessment from comprehensive analysis results."""
