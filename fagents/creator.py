@@ -262,12 +262,12 @@ class CreatorAgent(FoundationalAgent):
         """Handle test generation tasks."""
         self.report_progress("Generating tests", f"Goal: {goal}")
         
-        # Extract parameters from inputs
+        # Extract parameters from inputs (structured inputs from InterAgentRouter)
         test_type = inputs.get("test_type", TestType.UNIT.value)
         framework = inputs.get("test_framework", TestFramework.PYTEST.value)
         language = inputs.get("language", "Python")
         code_to_test = inputs.get("code_to_test", inputs.get("target_code", ""))
-        requirements = inputs.get("test_requirements", goal)
+        requirements = inputs.get("test_requirements", inputs.get("requirements", goal))
         
         # Map quality to test quality (defaults to FAST, LLM can upgrade)
         quality = inputs.get("quality", "fast")

@@ -65,8 +65,8 @@ class IntelligentInteractiveSession:
                 workspace = Path(workspace_path) if workspace_path else Path.cwd()
                 self.global_context = GlobalContext(workspace_path=workspace)
                 
-            # Initialize intelligent workflow coordinator
-            self.workflow_coordinator = WorkflowCoordinator(llm_client=llm_client)
+            # Initialize intelligent workflow coordinator with UI transparency
+            self.workflow_coordinator = WorkflowCoordinator(llm_client=llm_client, ui_interface=self.ui)
             
             # Session state
             self.active_workflows: Dict[str, Any] = {}

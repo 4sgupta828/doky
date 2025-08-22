@@ -79,9 +79,10 @@ class InterAgentRouter:
     toward the user's goal.
     """
     
-    def __init__(self, llm_client: Any = None, agent_registry: Dict[str, Any] = None):
+    def __init__(self, llm_client: Any = None, agent_registry: Dict[str, Any] = None, ui_interface: Any = None):
         self.llm_client = llm_client
         self.agent_registry = agent_registry or {}
+        self.ui_interface = ui_interface
         
         # Load foundational agent registry if not provided
         if not self.agent_registry:
@@ -126,6 +127,12 @@ class InterAgentRouter:
             current_inputs = first_agent_decision.recommended_inputs
             current_goal = first_agent_decision.goal_for_agent
             
+            # Display initial routing decision to user
+            if self.ui_interface and hasattr(self.ui_interface, 'display_routing_decision'):
+                self.ui_interface.display_routing_decision(
+                    "USER REQUEST", current_agent, first_agent_decision.confidence, first_agent_decision.reasoning
+                )
+            
             logger.info(f"Initial routing decision: {current_agent} (confidence: {first_agent_decision.confidence:.2f})")
             logger.info(f"Reasoning: {first_agent_decision.reasoning}")
             
@@ -162,9 +169,16 @@ class InterAgentRouter:
                     break
                 
                 # Prepare for next iteration
+                previous_agent = execution_result.agent_name
                 current_agent = next_decision.agent_name
                 current_goal = next_decision.goal_for_agent
                 current_inputs = next_decision.recommended_inputs
+                
+                # Display routing decision to user
+                if self.ui_interface and hasattr(self.ui_interface, 'display_routing_decision'):
+                    self.ui_interface.display_routing_decision(
+                        previous_agent, current_agent, next_decision.confidence, next_decision.reasoning
+                    )
                 
                 logger.info(f"Next agent decision: {current_agent} (confidence: {next_decision.confidence:.2f})")
                 logger.info(f"Reasoning: {next_decision.reasoning}")
@@ -186,6 +200,10 @@ class InterAgentRouter:
         """Execute a single agent and return the execution record."""
         
         try:
+            # Display agent input to user if UI is available
+            if self.ui_interface and hasattr(self.ui_interface, 'display_agent_input'):
+                self.ui_interface.display_agent_input(agent_name, goal, inputs)
+            
             # Get agent class from registry
             agent_class = self.agent_registry.get(agent_name)
             if not agent_class:
@@ -205,6 +223,10 @@ class InterAgentRouter:
             
             # Execute agent
             result = agent_instance.execute(goal, inputs, global_context)
+            
+            # Display agent output to user if UI is available
+            if self.ui_interface and hasattr(self.ui_interface, 'display_agent_output'):
+                self.ui_interface.display_agent_output(agent_name, result.success, result.message, result.outputs)
             
             # Create execution record
             execution = AgentExecution(
@@ -325,8 +347,19 @@ class InterAgentRouter:
           {{"commands": ["command1", "command2"], "working_directory": "/path", "purpose": "description"}}
           Example Git setup: {{"commands": ["git init", "git config user.name 'Agent User'", "git config user.email 'agent@example.com'"], "working_directory": "{str(global_context.workspace_path)}", "purpose": "Git repository initialization"}}
         
-        - **CreatorAgent**: For file creation, provide:
-          {{"file_path": "path/to/file", "content_type": "python|javascript|markdown", "requirements": ["req1", "req2"]}}
+        - **CreatorAgent**: For content creation, provide structured inputs based on creation type:
+          
+          For **test creation**:
+          {{"creation_type": "tests", "test_type": "unit|integration|cli|api|performance", "test_framework": "pytest|unittest|jest", "test_quality": "fast|decent|production", "target_files": ["file1.py"], "requirements": ["test requirement 1", "test requirement 2"]}}
+          
+          For **code creation**:
+          {{"creation_type": "code", "language": "python|javascript|java", "code_type": "function|class|module|library", "file_path": "path/to/file", "requirements": ["code requirement 1", "code requirement 2"]}}
+          
+          For **documentation creation**:
+          {{"creation_type": "documentation", "doc_type": "readme|api_doc|user_guide|technical_spec", "format": "markdown|html|rst", "requirements": ["doc requirement 1", "doc requirement 2"]}}
+          
+          For **project creation**:
+          {{"creation_type": "project", "project_type": "library|cli_app|web_app|api", "language": "python|javascript|java", "structure": ["component1", "component2"], "requirements": ["project requirement 1", "project requirement 2"]}}
         
         - **SurgeonAgent**: For modifications, provide:
           {{"target_files": ["file1.py", "file2.py"], "operation": "fix|refactor|update", "specific_changes": ["change description"]}}
@@ -563,8 +596,19 @@ class InterAgentRouter:
         
         - **ExecutorAgent**: For shell operations, provide:
           {{"commands": ["command1", "command2"], "working_directory": "/path", "purpose": "description"}}
-        - **CreatorAgent**: For file creation, provide:
-          {{"file_path": "path/to/file", "content_type": "python|javascript|markdown", "requirements": ["req1", "req2"]}}
+        - **CreatorAgent**: For content creation, provide structured inputs based on creation type:
+          
+          For **test creation**:
+          {{"creation_type": "tests", "test_type": "unit|integration|cli|api|performance", "test_framework": "pytest|unittest|jest", "test_quality": "fast|decent|production", "target_files": ["file1.py"], "requirements": ["test requirement 1", "test requirement 2"]}}
+          
+          For **code creation**:
+          {{"creation_type": "code", "language": "python|javascript|java", "code_type": "function|class|module|library", "file_path": "path/to/file", "requirements": ["code requirement 1", "code requirement 2"]}}
+          
+          For **documentation creation**:
+          {{"creation_type": "documentation", "doc_type": "readme|api_doc|user_guide|technical_spec", "format": "markdown|html|rst", "requirements": ["doc requirement 1", "doc requirement 2"]}}
+          
+          For **project creation**:
+          {{"creation_type": "project", "project_type": "library|cli_app|web_app|api", "language": "python|javascript|java", "structure": ["component1", "component2"], "requirements": ["project requirement 1", "project requirement 2"]}}
         - **SurgeonAgent**: For modifications, provide:
           {{"target_files": ["file1.py"], "operation": "fix|refactor|update", "specific_changes": ["change description"]}}
         - **Other agents**: Provide relevant context and parameters
@@ -639,7 +683,7 @@ class InterAgentRouter:
 
 def execute_multi_agent_workflow(user_goal: str, initial_inputs: Dict[str, Any],
                                 global_context: GlobalContext, llm_client: Any = None,
-                                max_hops: int = 10) -> WorkflowContext:
+                                max_hops: int = 10, ui_interface: Any = None) -> WorkflowContext:
     """
     Convenience function to execute a complete multi-agent workflow.
     
@@ -649,9 +693,10 @@ def execute_multi_agent_workflow(user_goal: str, initial_inputs: Dict[str, Any],
         global_context: Global execution context
         llm_client: LLM client for intelligent routing
         max_hops: Maximum number of agent invocations
+        ui_interface: UI interface for displaying agent I/O to users
         
     Returns:
         WorkflowContext with complete execution results
     """
-    router = InterAgentRouter(llm_client=llm_client)
+    router = InterAgentRouter(llm_client=llm_client, ui_interface=ui_interface)
     return router.execute_workflow(user_goal, initial_inputs, global_context, max_hops)

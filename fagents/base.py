@@ -20,9 +20,10 @@ class FoundationalAgent(ABC):
     4. Tool-leveraged - maximize use of atomic, reusable tools
     """
     
-    def __init__(self, name: str, description: str):
+    def __init__(self, name: str, description: str, ui_interface: Any = None):
         self.name = name
         self.description = description
+        self.ui_interface = ui_interface
         self.logger = logging.getLogger(f"{__name__}.{name}")
         
     @abstractmethod
@@ -71,6 +72,23 @@ class FoundationalAgent(ABC):
     def report_intermediate_output(self, output_type: str, data: Any) -> None:
         """Report intermediate output during processing."""
         self.logger.info(f"[{self.name}] {output_type}: {type(data).__name__} output generated")
+    
+    def report_llm_communication(self, prompt: str, response: str) -> None:
+        """Report LLM communication for transparency."""
+        if self.ui_interface and hasattr(self.ui_interface, 'display_llm_communication'):
+            self.ui_interface.display_llm_communication(self.name, prompt, response)
+        
+        # Also log for debugging
+        self.logger.debug(f"[{self.name}] LLM prompt: {prompt[:200]}...")
+        self.logger.debug(f"[{self.name}] LLM response: {response[:200]}...")
+    
+    def report_agent_io(self, goal: str, inputs: Dict[str, Any], result: AgentResult) -> None:
+        """Report agent input/output for transparency."""
+        if self.ui_interface:
+            if hasattr(self.ui_interface, 'display_agent_input'):
+                self.ui_interface.display_agent_input(self.name, goal, inputs)
+            if hasattr(self.ui_interface, 'display_agent_output'):
+                self.ui_interface.display_agent_output(self.name, result.success, result.message, result.outputs)
         
     def create_result(self, success: bool, message: str, outputs: Dict[str, Any] = None) -> AgentResult:
         """Create a standardized AgentResult."""

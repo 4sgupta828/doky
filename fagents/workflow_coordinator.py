@@ -30,9 +30,10 @@ class WorkflowCoordinator:
     4. Maintains execution history and progress tracking
     """
     
-    def __init__(self, llm_client: Any = None, agent_registry: Dict[str, Any] = None):
+    def __init__(self, llm_client: Any = None, agent_registry: Dict[str, Any] = None, ui_interface: Any = None):
         self.llm_client = llm_client
-        self.router = InterAgentRouter(llm_client, agent_registry)
+        self.ui_interface = ui_interface
+        self.router = InterAgentRouter(llm_client, agent_registry, ui_interface)
         self.active_workflows: Dict[str, WorkflowContext] = {}
     
     def execute_goal(self, user_goal: str, inputs: Dict[str, Any] = None, 
@@ -328,7 +329,7 @@ class WorkflowCoordinator:
 
 # Convenience function for simple goal execution
 def execute_user_goal(user_goal: str, inputs: Dict[str, Any] = None,
-                     llm_client: Any = None, max_hops: int = 10) -> AgentResult:
+                     llm_client: Any = None, max_hops: int = 10, ui_interface: Any = None) -> AgentResult:
     """
     Execute a user goal with intelligent multi-agent coordination.
     
@@ -339,9 +340,10 @@ def execute_user_goal(user_goal: str, inputs: Dict[str, Any] = None,
         inputs: Optional initial inputs
         llm_client: LLM client for intelligent routing
         max_hops: Maximum agent invocations allowed
+        ui_interface: UI interface for I/O transparency
         
     Returns:
         AgentResult with comprehensive workflow results
     """
-    coordinator = WorkflowCoordinator(llm_client=llm_client)
+    coordinator = WorkflowCoordinator(llm_client=llm_client, ui_interface=ui_interface)
     return coordinator.execute_goal(user_goal, inputs, max_hops=max_hops)

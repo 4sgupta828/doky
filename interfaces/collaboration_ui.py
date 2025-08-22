@@ -251,6 +251,107 @@ class CollaborationUI:
         print(f"\n💭 {agent_name} thinking:")
         print(f"   \"{thought}\"")
 
+    def display_agent_input(self, agent_name: str, goal: str, inputs: dict, reasoning: str = None):
+        """Shows clean, formatted agent input with smart trimming and boundaries."""
+        from utils.content_trimmer import trim_content
+        
+        print(f"\n{'═' * 80}")
+        print(f"🤖 {Style.Fg.INFO}{Style.BOLD}[AGENT INPUT] {agent_name}{Style.RESET}")
+        if reasoning:
+            print(f"🧠 {Style.Fg.MUTED}Routing reason: {reasoning}{Style.RESET}")
+        print(f"{'─' * 80}")
+        
+        # Display goal
+        print(f"🎯 {Style.BOLD}Goal:{Style.RESET} {goal}")
+        
+        # Display inputs with smart trimming
+        if inputs:
+            print(f"📥 {Style.BOLD}Inputs:{Style.RESET}")
+            for key, value in inputs.items():
+                # Trim the value smartly
+                trim_result = trim_content(value, "auto")
+                
+                print(f"   {Style.Fg.CODE}{key}:{Style.RESET}")
+                if trim_result.was_truncated:
+                    print(f"      {trim_result.content}")
+                    print(f"      {Style.Fg.MUTED}... {trim_result.truncation_info}{Style.RESET}")
+                else:
+                    # For short content, format nicely
+                    content_lines = trim_result.content.split('\n')
+                    for line in content_lines:
+                        print(f"      {line}")
+        else:
+            print(f"📥 {Style.Fg.MUTED}No inputs provided{Style.RESET}")
+        
+        print(f"{'─' * 80}")
+
+    def display_agent_output(self, agent_name: str, success: bool, message: str, outputs: dict = None):
+        """Shows clean, formatted agent output with smart trimming and boundaries."""
+        from utils.content_trimmer import trim_content
+        
+        # Status indicator
+        status_icon = "✅" if success else "❌"
+        status_color = Style.Fg.SUCCESS if success else Style.Fg.ERROR
+        
+        print(f"📤 {Style.BOLD}Output:{Style.RESET}")
+        print(f"   {status_icon} {status_color}Status:{Style.RESET} {'SUCCESS' if success else 'FAILED'}")
+        print(f"   💬 {Style.BOLD}Message:{Style.RESET} {message}")
+        
+        # Display outputs with smart trimming  
+        if outputs:
+            print(f"   📋 {Style.BOLD}Data:{Style.RESET}")
+            for key, value in outputs.items():
+                # Trim the value smartly
+                trim_result = trim_content(value, "auto")
+                
+                print(f"      {Style.Fg.CODE}{key}:{Style.RESET}")
+                if trim_result.was_truncated:
+                    # Show trimmed content with indentation
+                    content_lines = trim_result.content.split('\n')
+                    for line in content_lines:
+                        print(f"         {line}")
+                    print(f"         {Style.Fg.MUTED}... {trim_result.truncation_info}{Style.RESET}")
+                else:
+                    # For short content, format nicely  
+                    content_lines = trim_result.content.split('\n')
+                    for line in content_lines:
+                        print(f"         {line}")
+        
+        print(f"{'═' * 80}")
+
+    def display_routing_decision(self, from_agent: str, to_agent: str, confidence: float, reasoning: str):
+        """Shows intelligent routing decisions between agents."""
+        print(f"\n🔀 {Style.Fg.INFO}{Style.BOLD}[ROUTING DECISION]{Style.RESET}")
+        print(f"   {from_agent} → {Style.Fg.SUCCESS}{to_agent}{Style.RESET} (confidence: {confidence:.2f})")
+        print(f"   💡 {Style.Fg.MUTED}{reasoning}{Style.RESET}")
+
+    def display_llm_communication(self, agent_name: str, prompt_preview: str, response_preview: str):
+        """Shows LLM communication for transparency."""
+        from utils.content_trimmer import trim_content
+        
+        print(f"\n🧠 {Style.Fg.CODE}{Style.BOLD}[LLM COMMUNICATION] {agent_name}{Style.RESET}")
+        print(f"{'─' * 80}")
+        
+        # Show prompt preview - increased limit for better visibility
+        prompt_trim = trim_content(prompt_preview, "text", {"text": 800})
+        print(f"📤 {Style.BOLD}Prompt:{Style.RESET}")
+        prompt_lines = prompt_trim.content.split('\n')
+        for line in prompt_lines:
+            print(f"   {line}")
+        if prompt_trim.was_truncated:
+            print(f"   {Style.Fg.MUTED}... {prompt_trim.truncation_info}{Style.RESET}")
+        
+        # Show response preview - increased limit for better visibility
+        response_trim = trim_content(response_preview, "text", {"text": 1000})
+        print(f"📥 {Style.BOLD}Response:{Style.RESET}")
+        response_lines = response_trim.content.split('\n')
+        for line in response_lines:
+            print(f"   {line}")
+        if response_trim.was_truncated:
+            print(f"   {Style.Fg.MUTED}... {response_trim.truncation_info}{Style.RESET}")
+        
+        print(f"{'─' * 80}")
+
     def display_intermediate_output(self, agent_name: str, output_type: str, content: Any, preview_lines: int = 10):
         """Shows intermediate outputs like generated code, specs, etc. with preview."""
         if output_type == "code_diff" and isinstance(content, dict):
@@ -288,10 +389,10 @@ class CollaborationUI:
                 print(f"   ... ({len(lines) - preview_lines} more lines) - Press Ctrl+R to see full output")
         else:
             str_content = str(content)
-            if show_full or len(str_content) <= 300:
+            if show_full or len(str_content) <= 1000:  # Increased from 300
                 print(f"   {str_content}")
             else:
-                print(f"   {str_content[:300]}...")
+                print(f"   {str_content[:1000]}...")  # Increased from 300
                 print(f"   {Style.Fg.MUTED}... (truncated) - Press Ctrl+R to see full output{Style.RESET}")
         print(f"   " + "─" * 76)
     
