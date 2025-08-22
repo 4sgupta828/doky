@@ -527,27 +527,37 @@ class InterAgentRouter:
 
     def _apply_anti_loop_protection(self, decision: NextAgentDecision, 
                                    workflow_context: WorkflowContext) -> NextAgentDecision:
-        """Apply anti-loop protection to prevent infinite agent loops."""
+        """Apply anti-loop protection to prevent infinite agent loops with context awareness."""
         
         if not workflow_context.execution_history:
             return decision  # No history to check
         
         # Check for consecutive same-agent executions
-        recent_agents = [ex.agent_name for ex in workflow_context.execution_history[-3:]]  # Last 3 executions
+        recent_executions = workflow_context.execution_history[-3:]  # Last 3 executions
         consecutive_count = 0
+        consecutive_executions = []
         
-        # Count consecutive occurrences of the proposed agent
-        for agent_name in reversed(recent_agents):
-            if agent_name == decision.agent_name:
+        # Count consecutive occurrences of the proposed agent from the end
+        for execution in reversed(recent_executions):
+            if execution.agent_name == decision.agent_name:
                 consecutive_count += 1
+                consecutive_executions.insert(0, execution)  # Insert at beginning to maintain order
             else:
                 break
         
-        # If the same agent has been called 2+ times consecutively, trigger protection
+        # If the same agent has been called 2+ times consecutively, check for legitimate variation
         if consecutive_count >= 2:
+            # Check if this is a legitimate workflow progression (not a loop)
+            if self._is_legitimate_progression(decision, consecutive_executions, workflow_context):
+                logger.info(
+                    f"ANTI-LOOP CHECK: {decision.agent_name} called {consecutive_count} times consecutively, "
+                    f"but detected legitimate workflow progression. Allowing continuation."
+                )
+                return decision  # Allow legitimate progression
+            
             logger.warning(
-                f"ANTI-LOOP PROTECTION: {decision.agent_name} called {consecutive_count} times consecutively. "
-                f"Recent agents: {recent_agents}. Routing to AnalystAgent for validation."
+                f"ANTI-LOOP PROTECTION: {decision.agent_name} called {consecutive_count} times consecutively "
+                f"with similar goals/contexts. Routing to AnalystAgent for validation."
             )
             
             # Override decision to route to AnalystAgent for validation
@@ -556,8 +566,8 @@ class InterAgentRouter:
                 confidence=0.8,
                 reasoning=(
                     f"Anti-loop protection triggered: {decision.agent_name} was called {consecutive_count} "
-                    f"times consecutively. Routing to AnalystAgent to assess progress and determine if "
-                    f"the user's goal has been completed or needs a different approach."
+                    f"times consecutively with similar goals. Routing to AnalystAgent to assess progress "
+                    f"and determine if the user's goal has been completed or needs a different approach."
                 ),
                 recommended_inputs={
                     "validation_type": "workflow_progress",
@@ -575,6 +585,123 @@ class InterAgentRouter:
             )
         
         return decision  # No protection needed
+    
+    def _is_legitimate_progression(self, decision: NextAgentDecision, 
+                                  consecutive_executions: List[AgentExecution],
+                                  workflow_context: WorkflowContext) -> bool:
+        """
+        Determine if consecutive agent calls represent legitimate workflow progression.
+        Uses a general approach based on input/output differences rather than agent-specific logic.
+        """
+        if not consecutive_executions:
+            return True  # No previous executions to compare
+        
+        # Strategy 1: Check if inputs are substantially different
+        # Compare current decision with the most recent execution
+        recent_execution_signature = self._get_inputs_signature([consecutive_executions[-1]])
+        current_inputs_signature = self._get_decision_inputs_signature(decision)
+        
+        if recent_execution_signature != current_inputs_signature:
+            logger.info(f"Different input signature detected for {decision.agent_name} - allowing progression")
+            return True
+        
+        # Strategy 2: Check if outputs show actual progress (different work being done)
+        if len(consecutive_executions) >= 2:
+            outputs_are_progressing = self._outputs_show_progression(consecutive_executions)
+            if outputs_are_progressing:
+                logger.info(f"Output progression detected for {decision.agent_name} - allowing continuation")
+                return True
+        
+        # Strategy 3: Check goal semantic difference using simple heuristics
+        goal_similarity = self._calculate_goal_similarity(consecutive_executions, decision.goal_for_agent)
+        if goal_similarity < 0.3:  # Less than 30% similar = different enough
+            logger.info(f"Goals sufficiently different (similarity: {goal_similarity:.2f}) - allowing progression")
+            return True
+        
+        # If all checks fail, it's likely a genuine loop
+        return False
+    
+    def _get_inputs_signature(self, executions: List[AgentExecution]) -> str:
+        """Get a signature representing the key inputs across executions."""
+        signatures = []
+        for execution in executions:
+            # Extract key differentiating fields from inputs
+            key_fields = []
+            inputs = execution.inputs
+            
+            # Common differentiating fields across all agents
+            for field in ["creation_type", "commands", "target_files", "operation", "analysis_type", "test_type"]:
+                if field in inputs:
+                    value = inputs[field]
+                    if isinstance(value, list):
+                        key_fields.append(f"{field}:{','.join(sorted(str(v) for v in value))}")
+                    else:
+                        key_fields.append(f"{field}:{value}")
+            
+            signatures.append("|".join(sorted(key_fields)))
+        
+        return "::".join(signatures)
+    
+    def _get_decision_inputs_signature(self, decision: NextAgentDecision) -> str:
+        """Get signature for the proposed decision's inputs."""
+        inputs = decision.recommended_inputs
+        key_fields = []
+        
+        # Same logic as _get_inputs_signature but for decision inputs
+        for field in ["creation_type", "commands", "target_files", "operation", "analysis_type", "test_type"]:
+            if field in inputs:
+                value = inputs[field]
+                if isinstance(value, list):
+                    key_fields.append(f"{field}:{','.join(sorted(str(v) for v in value))}")
+                else:
+                    key_fields.append(f"{field}:{value}")
+        
+        return "|".join(sorted(key_fields))
+    
+    def _outputs_show_progression(self, executions: List[AgentExecution]) -> bool:
+        """Check if outputs across executions show actual progression/different work."""
+        if len(executions) < 2:
+            return False
+        
+        # Compare first and last execution outputs
+        first_outputs = executions[0].result.outputs or {}
+        last_outputs = executions[-1].result.outputs or {}
+        
+        # Check for different output structure or values
+        first_keys = set(first_outputs.keys())
+        last_keys = set(last_outputs.keys())
+        
+        # Different keys = different work
+        if first_keys != last_keys:
+            return True
+        
+        # Same keys but different values = progression
+        for key in first_keys:
+            if first_outputs.get(key) != last_outputs.get(key):
+                return True
+        
+        return False
+    
+    def _calculate_goal_similarity(self, executions: List[AgentExecution], current_goal: str) -> float:
+        """Calculate similarity between previous goals and current goal."""
+        if not executions:
+            return 0.0
+        
+        # Combine all previous goals
+        prev_goal_words = set()
+        for execution in executions:
+            prev_goal_words.update(execution.goal.lower().split())
+        
+        current_goal_words = set(current_goal.lower().split())
+        
+        if not prev_goal_words or not current_goal_words:
+            return 0.0
+        
+        # Calculate Jaccard similarity
+        intersection = len(prev_goal_words.intersection(current_goal_words))
+        union = len(prev_goal_words.union(current_goal_words))
+        
+        return intersection / union if union > 0 else 0.0
     
     def _determine_first_agent(self, user_goal: str, initial_inputs: Dict[str, Any], 
                               global_context: GlobalContext) -> NextAgentDecision:
