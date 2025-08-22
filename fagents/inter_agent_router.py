@@ -158,7 +158,7 @@ class InterAgentRouter:
                 if execution_result.result.success and execution_result.result.outputs:
                     workflow_context.accumulated_outputs.update(execution_result.result.outputs)
                 
-                # Determine next agent
+                # Determine next agent (with failure context if needed)
                 next_decision = self._determine_next_agent(workflow_context, global_context)
                 
                 if next_decision.is_completion:
@@ -259,6 +259,7 @@ class InterAgentRouter:
                 "No fallback routing available - please ensure OpenAI LLM Tool is properly configured."
             )
         
+        
         try:
             # Build context for LLM decision
             prompt = self._build_next_agent_prompt(workflow_context, global_context)
@@ -336,14 +337,22 @@ class InterAgentRouter:
         3. **Logical Sequence**: Follow natural development workflow (analyze → create → test → validate)
         4. **Avoid Redundancy**: Don't repeat work already done by previous agents
         5. **Completion Detection**: If the goal appears completed, route to AnalystAgent for validation
+        6. **NO FAILURE WORKAROUNDS**: If an agent failed, don't route the same task to a different agent. Instead:
+           - For technical errors/failures: Route to DebuggingAgent to fix root cause
+           - For capability mismatches: Route to AnalystAgent to determine correct approach
+           - Only retry the same agent AFTER the underlying issue is fixed
         
         **AGENT SELECTION CRITERIA:**
         - **AnalystAgent**: Use for initial analysis, final validation, or when understanding is needed
         - **StrategistAgent**: Use for complex planning, task decomposition, or orchestration
         - **CreatorAgent**: Use when something new needs to be created (code, tests, docs, specs)  
-        - **SurgeonAgent**: Use for precise modifications, fixes, or surgical operations
+        - **SurgeonAgent**: Use for precise modifications, fixes, or surgical operations on existing code
         - **ExecutorAgent**: Use for running tests, validation, builds, or system operations
-        - **DebuggingAgent**: Use for systematic debugging and troubleshooting
+        - **DebuggingAgent**: Use for systematic debugging and troubleshooting failures
+        
+        **FOR FAILURES**: 
+        - Any technical errors/failures → DebuggingAgent to fix root cause
+        - Wrong agent selection → AnalystAgent to reassess approach
         
         **RECOMMENDED_INPUTS GUIDANCE:**
         When routing to specific agents, provide structured inputs in recommended_inputs:
@@ -398,7 +407,11 @@ class InterAgentRouter:
         - Choose the agent that makes the most direct progress toward completion
         - Provide specific, actionable goals for the next agent
         - If multiple agents could help, choose the one that advances the workflow most significantly
-        - AVOID REPEATED CALLS to the same agent unless there is clear, different work to be done
+        - **FAILURE ANALYSIS**: If the previous agent FAILED, look at WHY:
+          * Technical errors (git, files, dependencies, environment, etc.) → Route to DebuggingAgent to fix
+          * Wrong agent chosen for the task → Route to AnalystAgent to reassess  
+          * DO NOT route the failed task to a different agent as a "workaround"
+        - **AGENT BOUNDARIES**: Only route tasks that match the agent's core capabilities
         
         **RESPONSE FORMAT:**
         Your response must be a single JSON object with these exact keys:
