@@ -10,6 +10,7 @@ progress and includes completion validation.
 
 import json
 import logging
+import re
 from typing import Dict, Any, List, Optional
 from enum import Enum
 from dataclasses import dataclass, field
@@ -242,7 +243,16 @@ class InterAgentRouter:
             
             # Get LLM response
             response_str = self.llm_client.invoke(prompt)
-            response_data = json.loads(response_str)
+            
+            # Sanitize and parse JSON response
+            try:
+                sanitized_response = self._sanitize_json_response(response_str)
+                response_data = json.loads(sanitized_response)
+            except json.JSONDecodeError as e:
+                logger.error(f"JSON parsing failed even after sanitization. Error: {e}")
+                logger.error(f"Original response (first 500 chars): {response_str[:500]}")
+                logger.error(f"Sanitized response (first 500 chars): {sanitized_response[:500] if 'sanitized_response' in locals() else 'N/A'}")
+                raise
             
             # Parse and validate response
             return self._parse_next_agent_decision(response_data, workflow_context)
@@ -461,7 +471,16 @@ class InterAgentRouter:
             
             # Get LLM response
             response_str = self.llm_client.invoke(prompt)
-            response_data = json.loads(response_str)
+            
+            # Sanitize and parse JSON response
+            try:
+                sanitized_response = self._sanitize_json_response(response_str)
+                response_data = json.loads(sanitized_response)
+            except json.JSONDecodeError as e:
+                logger.error(f"JSON parsing failed for initial routing. Error: {e}")
+                logger.error(f"Original response (first 500 chars): {response_str[:500]}")
+                logger.error(f"Sanitized response (first 500 chars): {sanitized_response[:500] if 'sanitized_response' in locals() else 'N/A'}")
+                raise
             
             # Parse and validate response
             return self._parse_next_agent_decision(response_data, None)
@@ -581,6 +600,41 @@ class InterAgentRouter:
         
         return "\n".join(summary_lines)
     
+    def _sanitize_json_response(self, response_str: str) -> str:
+        """
+        Sanitize LLM response to fix common JSON parsing issues.
+        
+        Args:
+            response_str: Raw response string from LLM
+            
+        Returns:
+            Sanitized JSON string
+        """
+        if not response_str:
+            return response_str
+        
+        # Remove control characters that break JSON parsing
+        # Keep only printable ASCII characters, spaces, tabs, and newlines
+        sanitized = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]', '', response_str)
+        
+        # Find JSON content between first { and last }
+        start_brace = sanitized.find('{')
+        end_brace = sanitized.rfind('}')
+        
+        if start_brace != -1 and end_brace != -1 and end_brace > start_brace:
+            json_content = sanitized[start_brace:end_brace + 1]
+        else:
+            # If no braces found, return sanitized string as-is
+            json_content = sanitized
+        
+        # Additional cleanup for common issues
+        # Don't modify properly escaped quotes, only fix mangled ones
+        # This is more conservative to avoid breaking valid JSON
+        
+        # Remove trailing commas before closing braces/brackets
+        json_content = re.sub(r',(\s*[}\]])', r'\1', json_content)
+        
+        return json_content
 
 
 def execute_multi_agent_workflow(user_goal: str, initial_inputs: Dict[str, Any],
