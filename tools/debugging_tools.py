@@ -492,13 +492,13 @@ def validate_debugging_inputs(inputs: Dict[str, Any]) -> None:
     """
     Validate inputs for debugging operations.
     """
-    required = ["problem_description"]
-    missing = [key for key in required if key not in inputs or not inputs[key]]
+    # Check for problem_description (should be provided by InterAgentRouter)
+    problem_description = inputs.get("problem_description", "")
     
-    if missing:
-        raise ValueError(f"Missing required debugging inputs: {missing}")
+    if not problem_description:
+        raise ValueError(f"Missing required debugging inputs: ['problem_description'] - available keys: {list(inputs.keys())}")
         
-    if not isinstance(inputs["problem_description"], str):
+    if not isinstance(problem_description, str):
         raise ValueError("problem_description must be a string")
 
 

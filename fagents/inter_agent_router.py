@@ -391,6 +391,9 @@ class InterAgentRouter:
         - **SurgeonAgent**: For modifications, provide:
           {{"target_files": ["file1.py", "file2.py"], "operation": "fix|refactor|update", "specific_changes": ["change description"]}}
         
+        - **DebuggingAgent**: For systematic debugging, provide:
+          {{"problem_description": "clear description of the issue", "workspace_path": "/path/to/workspace", "error_observed": "specific error details", "failed_test_report": "test failure details if available", "debugging_mode": "evidence_gathering|hypothesis_formation|fix_validation|full_debugging"}}
+        
         - **Other agents**: Provide relevant context and parameters as appropriate
         
         **COMPLETION DETECTION:**
@@ -837,6 +840,8 @@ class InterAgentRouter:
           **GUIDANCE**: Use "code" creation for simple requests like "write a program/script to X". Use "full_project" only when explicitly requiring structured applications with multiple components.
         - **SurgeonAgent**: For modifications, provide:
           {{"target_files": ["file1.py"], "operation": "fix|refactor|update", "specific_changes": ["change description"]}}
+        - **DebuggingAgent**: For systematic debugging, provide:
+          {{"problem_description": "clear description of the issue", "workspace_path": "/path/to/workspace", "error_observed": "specific error details", "failed_test_report": "test failure details if available", "debugging_mode": "evidence_gathering|hypothesis_formation|fix_validation|full_debugging"}}
         - **Other agents**: Provide relevant context and parameters
         
         **RESPONSE FORMAT:**

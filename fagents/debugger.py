@@ -7,7 +7,7 @@ The Master Troubleshooter - Systematic bug diagnosis, hypothesis formation, and 
 
 import json
 import logging
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any
 
 # Foundational base
 from .base import FoundationalAgent
@@ -16,18 +16,15 @@ from core.models import AgentResult
 
 # Debugging tools - atomic and reusable
 from tools.debugging_tools import (
-    DebuggingState, FixStrategy,
+    DebuggingState,
     create_debugging_session, validate_debugging_inputs,
     scan_for_relevant_logs, classify_problem_type,
     generate_debugging_hypothesis, perform_failure_reflection,
-    update_debugging_confidence, generate_instrumentation_plan
+    update_debugging_confidence
 )
 
 # Analysis and execution tools  
-from tools.problem_analysis_tools import (
-    classify_problem, analyze_errors, assess_severity,
-    analyze_root_causes, generate_problem_recommendations
-)
+from tools.problem_analysis_tools import analyze_errors
 from tools.test_tools import execute_tests
 from tools.test_generation_tools import TestGenerationContext, TestType, generate_tests
 from tools.code_generation_tools import CodeGenerationContext, generate_code
@@ -82,10 +79,11 @@ class DebuggingAgent(FoundationalAgent):
         self.report_progress("Starting debugging session", f"Goal: {goal}")
         
         try:
-            # Validate inputs
+            # Ensure standard debugging inputs are available
+            self._ensure_standard_inputs(inputs)
             validate_debugging_inputs(inputs)
             
-            # Determine debugging mode
+            # Determine debugging mode based on goal and inputs
             debug_mode = self._determine_debug_mode(goal, inputs)
             self.report_progress("Debug mode determined", debug_mode)
             
@@ -140,6 +138,20 @@ class DebuggingAgent(FoundationalAgent):
             "complexity_handling": "Can debug simple syntax errors to complex system-wide issues"
         }
     
+    def _ensure_standard_inputs(self, inputs: Dict[str, Any]) -> None:
+        """
+        Ensure DebuggingAgent receives standard input fields as expected from InterAgentRouter.
+        Simple field mapping for backward compatibility.
+        """
+        # Simple fallback if InterAgentRouter doesn't provide problem_description
+        if "problem_description" not in inputs or not inputs["problem_description"]:
+            # Use error_observed as problem description if available
+            inputs["problem_description"] = inputs.get("error_observed", inputs.get("goal", ""))
+        
+        # Set defaults for optional fields
+        if "workspace_path" not in inputs:
+            inputs["workspace_path"] = inputs.get("workspace_dir")
+
     def _determine_debug_mode(self, goal: str, inputs: Dict[str, Any]) -> str:
         """Determine debugging mode based on goal and inputs."""
         goal_lower = goal.lower()
