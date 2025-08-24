@@ -196,6 +196,11 @@ class CreatorAgent(FoundationalAgent):
         except ValueError:
             quality_enum = CodeQuality.FAST
 
+        # Get existing code from inputs and workspace
+        existing_code = inputs.get("existing_code", {}) or {}
+        workspace_context = global_context.get_workspace_code_context()
+        existing_code.update(workspace_context)
+        
         # Create context for code generation
         context = CodeGenerationContext(
             goal=goal,
@@ -203,7 +208,7 @@ class CreatorAgent(FoundationalAgent):
             language=lang_enum,
             quality_level=quality_enum,
             files_to_generate=inputs.get("files_to_generate", None),
-            existing_code=inputs.get("existing_code", None),
+            existing_code=existing_code,
             dependencies=inputs.get("dependencies", None),
             frameworks=inputs.get("frameworks", None)
         )

@@ -201,6 +201,58 @@ class GlobalContext:
         print(summary)
         print("="*80 + "\n")
 
+    def get_workspace_code_context(self, file_extensions: List[str] = None) -> Dict[str, str]:
+        """
+        Get code, dependency, and project files from workspace as context.
+        Always reads fresh from disk. Filters out irrelevant files.
+        
+        Args:
+            file_extensions: Filter by extensions (e.g., ['.py', '.js'])
+                           If None, uses common code and project file extensions
+        
+        Returns:
+            Dict mapping file paths to file contents
+        """
+        if not self.workspace:
+            return {}
+            
+        if file_extensions is None:
+            # Code files
+            file_extensions = ['.py', '.js', '.ts', '.java', '.go', '.rs', '.cpp', '.c', '.h']
+            # Dependency/project files
+            file_extensions.extend(['.json', '.toml', '.yaml', '.yml', '.txt', '.md', '.cfg', '.ini'])
+            
+        # Files to exclude (common non-essential files)
+        exclude_patterns = [
+            '.gitignore', '.git/', '__pycache__/', '.pytest_cache/', 'node_modules/',
+            '.venv/', 'venv/', '.env', '.DS_Store', '*.pyc', '*.pyo', '*.pyd',
+            '.coverage', '.mypy_cache/', '.tox/', 'dist/', 'build/', '*.egg-info/',
+            '.idea/', '.vscode/', '*.log', '.cache/'
+        ]
+            
+        code_files = {}
+        try:
+            workspace_files = self.workspace.list_files()
+            for file_path in workspace_files:
+                # Skip if matches exclude patterns
+                if any(pattern.replace('*', '') in file_path or file_path.endswith(pattern.replace('*', '')) 
+                       for pattern in exclude_patterns):
+                    continue
+                    
+                # Include if matches desired extensions
+                if any(file_path.endswith(ext) for ext in file_extensions):
+                    try:
+                        content = self.workspace.get_file_content(file_path)
+                        if content and content.strip():  # Skip empty files
+                            code_files[file_path] = content
+                    except Exception as e:
+                        logger.warning(f"Failed to read {file_path}: {e}")
+                        
+        except Exception as e:
+            logger.error(f"Failed to discover workspace files: {e}")
+            
+        return code_files
+
     @classmethod
     def load_from_snapshot(cls, snapshot_path: str) -> 'GlobalContext':
         """

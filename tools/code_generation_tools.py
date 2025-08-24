@@ -487,6 +487,12 @@ def build_code_generation_prompt(context: CodeGenerationContext) -> str:
         {existing_code_str if context.existing_code else "No existing code provided. You are writing these files from scratch."}
         ---
 
+        **Code Reuse Guidelines:**
+        If existing code is provided above, prioritize reusing it where appropriate:
+        - Import and build upon existing functionality rather than duplicating it
+        - Extend or compose with existing code when it fits your requirements
+        - Only reimplement if the existing approach doesn't meet the new requirements
+
         **Quality-Specific Instructions:**
         {quality_instructions}
         
