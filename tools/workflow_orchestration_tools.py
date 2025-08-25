@@ -1,10 +1,9 @@
 # tools/planning/workflow_orchestration_tools.py
 import logging
-from typing import Dict, Any, List, Optional, Tuple, Callable
+from typing import Dict, Any, List, Optional, Callable
 from enum import Enum
 from dataclasses import dataclass, field
 from datetime import datetime
-import asyncio
 from concurrent.futures import ThreadPoolExecutor, Future
 
 # Core dependencies
@@ -169,8 +168,13 @@ class WorkflowOrchestrator:
             if self.context.progress_callback:
                 self.context.progress_callback(task_id, result)
             
-            # Handle failures
+            # Handle failures with detailed logging
             if result.state == ExecutionState.FAILED:
+                # Log detailed failure information
+                task = self.task_graph.nodes[task_id]
+                error_details = self._get_detailed_error_info(result, task)
+                logger.error(f"Task {task_id} failed with detailed info: {error_details}")
+                
                 if self.context.error_handling == "stop":
                     logger.error(f"Stopping workflow due to failed task: {task_id}")
                     break
@@ -274,7 +278,7 @@ class WorkflowOrchestrator:
             
             execution_state = ExecutionState.COMPLETED if result.success else ExecutionState.FAILED
             
-            return ExecutionResult(
+            execution_result = ExecutionResult(
                 step_id=task_id,
                 agent_name=task.assigned_agent,
                 state=execution_state,
@@ -284,13 +288,22 @@ class WorkflowOrchestrator:
                 duration_seconds=duration
             )
             
+            # Log execution details
+            if execution_state == ExecutionState.FAILED:
+                error_details = self._get_detailed_error_info(execution_result, task)
+                logger.error(f"Task {task_id} failed: {error_details}")
+            else:
+                logger.info(f"Task {task_id} completed successfully in {duration:.2f}s")
+            
+            return execution_result
+            
         except Exception as e:
             end_time = datetime.now()
             duration = (end_time - start_time).total_seconds()
             
             logger.error(f"Task execution failed: {task_id} - {e}")
             
-            return ExecutionResult(
+            failed_result = ExecutionResult(
                 step_id=task_id,
                 agent_name=task.assigned_agent,
                 state=ExecutionState.FAILED,
@@ -299,6 +312,13 @@ class WorkflowOrchestrator:
                 end_time=end_time,
                 duration_seconds=duration
             )
+            
+            # Log detailed failure information
+            task = self.task_graph.nodes[task_id]
+            error_details = self._get_detailed_error_info(failed_result, task)
+            logger.error(f"Detailed task failure info for {task_id}: {error_details}")
+            
+            return failed_result
     
     def _should_execute_task(self, task_id: str) -> bool:
         """Check if a task should be executed based on dependencies."""
@@ -387,6 +407,12 @@ class WorkflowOrchestrator:
         """Prepare inputs for task execution including dependency outputs."""
         inputs = {}  # TaskNode doesn't have inputs field, start empty
         
+        # Extract command from goal for shell execution tasks
+        if task.assigned_agent == "ShellExecutor" and task.goal.startswith("Execute: "):
+            command = task.goal[9:]  # Remove "Execute: " prefix
+            inputs["commands"] = [command]
+            logger.debug(f"Extracted command for {task.task_id}: {command}")
+        
         # Add outputs from dependency tasks
         for dep_id in task.dependencies:
             if dep_id in self.step_results and self.step_results[dep_id].result:
@@ -408,6 +434,62 @@ class WorkflowOrchestrator:
                 result.state = ExecutionState.CANCELLED
                 logger.info(f"Rolled back task: {task_id}")
     
+    def _get_detailed_error_info(self, execution_result: ExecutionResult, task: TaskNode) -> str:
+        """Get detailed error information for a failed task."""
+        details = []
+        
+        # Basic task info
+        details.append(f"Task: {execution_result.step_id}")
+        details.append(f"Goal: {task.goal[:100]}..." if len(task.goal) > 100 else f"Goal: {task.goal}")
+        details.append(f"Agent: {execution_result.agent_name}")
+        
+        # Execution details
+        if execution_result.duration_seconds:
+            details.append(f"Duration: {execution_result.duration_seconds:.2f}s")
+        
+        # Error information
+        if execution_result.error:
+            details.append(f"Exception: {execution_result.error}")
+        
+        # Agent result details
+        if execution_result.result:
+            result = execution_result.result
+            details.append(f"Agent success: {result.success}")
+            details.append(f"Agent message: {result.message}")
+            
+            # Check for shell command outputs
+            if hasattr(result, 'outputs') and result.outputs:
+                outputs = result.outputs
+                
+                # Look for command results
+                if 'command_results' in outputs:
+                    cmd_results = outputs['command_results']
+                    if isinstance(cmd_results, list) and cmd_results:
+                        for i, cmd_result in enumerate(cmd_results):
+                            if isinstance(cmd_result, dict):
+                                cmd = cmd_result.get('command', 'unknown')
+                                exit_code = cmd_result.get('exit_code', 'unknown')
+                                stdout = cmd_result.get('stdout', '').strip()[:200]
+                                stderr = cmd_result.get('stderr', '').strip()[:200]
+                                details.append(f"Command[{i}]: {cmd}")
+                                details.append(f"Exit code[{i}]: {exit_code}")
+                                if stdout:
+                                    details.append(f"STDOUT[{i}]: {stdout}")
+                                if stderr:
+                                    details.append(f"STDERR[{i}]: {stderr}")
+                
+                # Look for failed commands
+                if 'failed_commands' in outputs:
+                    failed_cmds = outputs['failed_commands']
+                    details.append(f"Failed commands: {failed_cmds}")
+                
+                # Look for error details
+                if 'error_details' in outputs:
+                    error_details = outputs['error_details']
+                    details.append(f"Error details: {error_details}")
+        
+        return "; ".join(details)
+    
     def _create_orchestration_result(self) -> OrchestrationResult:
         """Create final orchestration result."""
         completed_steps = sum(1 for r in self.step_results.values() if r.state == ExecutionState.COMPLETED)
@@ -426,7 +508,7 @@ class WorkflowOrchestrator:
                     error_msg += f": {result.error}"
                 error_summary.append(error_msg)
         
-        return OrchestrationResult(
+        result = OrchestrationResult(
             workflow_id=self.context.workflow_id,
             success=failed_steps == 0,
             total_steps=len(self.step_results),
@@ -437,6 +519,19 @@ class WorkflowOrchestrator:
             final_outputs=final_outputs,
             error_summary=error_summary
         )
+        
+        # Log summary of workflow execution
+        if failed_steps > 0:
+            logger.error(f"Workflow {self.context.workflow_id} completed with {failed_steps} failures out of {len(self.step_results)} tasks")
+            for task_id, step_result in self.step_results.items():
+                if step_result.state == ExecutionState.FAILED:
+                    task = self.task_graph.nodes[task_id]
+                    error_details = self._get_detailed_error_info(step_result, task)
+                    logger.error(f"Failed task {task_id} details: {error_details}")
+        else:
+            logger.info(f"Workflow {self.context.workflow_id} completed successfully with {completed_steps} tasks")
+        
+        return result
 
 
 def create_orchestration_context(

@@ -463,8 +463,18 @@ class ExecutorAgent(FoundationalAgent):
                 
                 if tool_output['exit_code'] != 0:
                     failed_commands.append(command)
+                    # Log detailed failure information
+                    error_info = (
+                        f"Command failed: {command} | "
+                        f"Exit code: {tool_output['exit_code']} | "
+                        f"STDERR: {tool_output['stderr'][:200]}" + 
+                        ("..." if len(tool_output['stderr']) > 200 else "") +
+                        (f" | STDOUT: {tool_output['stdout'][:100]}" if tool_output['stdout'].strip() else "")
+                    )
+                    logger.error(error_info)
+                    
                     if not ignore_errors:
-                        logger.error(f"Command failed, stopping execution: {command}")
+                        logger.error(f"Stopping execution due to command failure")
                         break
 
             total_duration = time.time() - start_time
@@ -473,6 +483,10 @@ class ExecutorAgent(FoundationalAgent):
             message = f"Executed {len(commands)} commands. Success: {success}"
             if failed_commands:
                 message += f". Failed commands: {len(failed_commands)}"
+                # Add details about the first failed command for transparency
+                first_failed_result = next((r for r in command_results if r['exit_code'] != 0), None)
+                if first_failed_result:
+                    message += f" (First failure: '{first_failed_result['command']}' exit code {first_failed_result['exit_code']})"
 
             return AgentResult(
                 success=success,
@@ -488,10 +502,15 @@ class ExecutorAgent(FoundationalAgent):
             )
 
         except Exception as e:
+            logger.error(f"Shell execution exception: {e}", exc_info=True)
             return AgentResult(
                 success=False,
                 message=f"Shell execution failed: {e}",
-                error_details={"exception": str(e)}
+                error_details={
+                    "exception": str(e), 
+                    "commands_attempted": commands,
+                    "working_directory": working_directory
+                }
             )
 
     def _handle_file_operations(self, goal: str, inputs: Dict[str, Any], global_context: GlobalContext) -> AgentResult:
