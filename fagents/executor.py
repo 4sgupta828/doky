@@ -216,6 +216,12 @@ class ExecutorAgent(FoundationalAgent):
         additional_args = inputs.get("additional_args", [])
 
         try:
+            # Step 0: Standardize project if needed (new step)
+            standardization_result = self._ensure_project_standardization(working_directory)
+            if not standardization_result.success:
+                logger.warning(f"Project standardization failed: {standardization_result.message}")
+                # Continue anyway - standardization is optional
+            
             # Step 1: Detect test framework
             framework_result = detect_test_framework(
                 requested_framework=test_framework, 
@@ -1590,3 +1596,43 @@ class ExecutorAgent(FoundationalAgent):
             return (f"⚠️ Multi-step workflow completed with issues: {orchestration_result.completed_steps}/"
                    f"{orchestration_result.total_steps} steps completed, "
                    f"{orchestration_result.failed_steps} failed. Errors: {orchestration_result.error_summary}")
+
+    def _ensure_project_standardization(self, working_directory: str) -> AgentResult:
+        """
+        Ensure the project has standard configuration files for proper test detection.
+        This prevents the need for generic auto-detection scripts.
+        """
+        try:
+            from tools.project_standardization_tools import standardize_project
+            
+            logger.info(f"Checking project standardization in {working_directory}")
+            
+            # Attempt to standardize the project
+            standardization_result = standardize_project(working_directory)
+            
+            if standardization_result.success:
+                if standardization_result.content.get("already_standardized"):
+                    message = f"✅ Project already standardized as {standardization_result.content['project_type']}"
+                else:
+                    generated_files = standardization_result.content.get("generated_files", [])
+                    message = f"✅ Generated {len(generated_files)} standard config files: {generated_files}"
+                
+                return AgentResult(
+                    success=True,
+                    message=message,
+                    outputs=standardization_result.content
+                )
+            else:
+                return AgentResult(
+                    success=False,
+                    message=f"Project standardization failed: {standardization_result.message}",
+                    error_details=standardization_result.error_details
+                )
+                
+        except Exception as e:
+            logger.error(f"Project standardization error: {e}")
+            return AgentResult(
+                success=False,
+                message=f"Project standardization error: {e}",
+                error_details={"exception": str(e)}
+            )
