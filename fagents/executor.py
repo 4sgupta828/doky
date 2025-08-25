@@ -232,13 +232,42 @@ class ExecutorAgent(FoundationalAgent):
 
             detected_framework = framework_result["framework"]
 
-            # Step 2: Discover test files
+            # Step 2: Check if test framework is available and auto-install if needed
+            availability_check = self._check_framework_availability(detected_framework, python_executable)
+            
+            if not availability_check["available"]:
+                logger.info(f"Test framework {detected_framework} not available: {availability_check['message']}")
+                logger.info(f"Attempting to auto-install {detected_framework}...")
+                
+                install_result = self._auto_install_test_framework(
+                    framework=detected_framework,
+                    python_executable=python_executable,
+                    working_directory=working_directory,
+                    global_context=global_context
+                )
+                
+                if not install_result["success"]:
+                    return AgentResult(
+                        success=False,
+                        message=f"Cannot run tests: {detected_framework} framework is not available and auto-installation failed. {install_result['message']}",
+                        error_details={
+                            "framework_detection": framework_result,
+                            "availability_check": availability_check,
+                            "installation_attempt": install_result
+                        }
+                    )
+                else:
+                    logger.info(f"Successfully auto-installed {detected_framework}: {install_result['message']}")
+            else:
+                logger.info(f"Test framework {detected_framework} is available: {availability_check['message']}")
+
+            # Step 3: Discover test files
             discovery_result = discover_test_files(
                 test_target=test_target or ".",
                 framework=detected_framework,
                 working_directory=working_directory,
-                test_patterns=test_patterns,
-                exclude_patterns=exclude_patterns
+                test_patterns=test_patterns if test_patterns else None,
+                exclude_patterns=exclude_patterns if exclude_patterns else None
             )
             
             if not discovery_result["success"]:
@@ -256,7 +285,7 @@ class ExecutorAgent(FoundationalAgent):
                     outputs={"test_files_discovered": 0}
                 )
 
-            # Step 3: Execute tests
+            # Step 4: Execute tests
             execution_result = execute_tests(
                 test_files=test_files,
                 framework=detected_framework,
@@ -268,12 +297,14 @@ class ExecutorAgent(FoundationalAgent):
                 output_format=output_format
             )
 
-            # Step 4: Parse and analyze results
+            # Step 5: Parse and analyze results
             analysis_result = parse_test_results(execution_result, detected_framework)
 
             # Combine results
             final_result = {
                 "test_framework": detected_framework,
+                "framework_availability_check": availability_check,
+                "framework_auto_installed": not availability_check["available"],
                 "test_files_discovered": len(test_files),
                 "test_files_executed": len(execution_result.get("executed_files", [])),
                 "execution_details": execution_result,
@@ -1396,6 +1427,136 @@ class ExecutorAgent(FoundationalAgent):
                 }
             )
     
+    def _check_framework_availability(self, framework: str, python_executable: str = None) -> Dict[str, Any]:
+        """Check if a test framework is available in the current environment."""
+        if python_executable is None:
+            python_executable = sys.executable
+        
+        try:
+            # Framework dependency mapping
+            framework_modules = {
+                "pytest": "pytest",
+                "unittest": "unittest",  # built-in, always available
+                "nose": "nose"
+            }
+            
+            if framework not in framework_modules:
+                return {
+                    "available": False,
+                    "message": f"Unknown test framework: {framework}",
+                    "module": None
+                }
+            
+            module_name = framework_modules[framework]
+            
+            # unittest is built-in, always available
+            if framework == "unittest":
+                return {
+                    "available": True,
+                    "message": f"{framework} is built-in and available",
+                    "module": module_name
+                }
+            
+            # Check if module can be imported
+            import subprocess
+            result = subprocess.run(
+                [python_executable, "-c", f"import {module_name}; print('SUCCESS')"],
+                capture_output=True,
+                text=True,
+                timeout=30
+            )
+            
+            available = result.returncode == 0 and "SUCCESS" in result.stdout
+            
+            return {
+                "available": available,
+                "message": f"{framework} {'is available' if available else 'is not installed'}",
+                "module": module_name,
+                "check_details": {
+                    "returncode": result.returncode,
+                    "stdout": result.stdout,
+                    "stderr": result.stderr
+                }
+            }
+            
+        except Exception as e:
+            return {
+                "available": False,
+                "message": f"Error checking {framework} availability: {e}",
+                "module": framework_modules.get(framework),
+                "error": str(e)
+            }
+
+    def _auto_install_test_framework(self, framework: str, python_executable: str = None, 
+                                   working_directory: str = ".", global_context = None) -> Dict[str, Any]:
+        """Automatically install missing test framework."""
+        if python_executable is None:
+            python_executable = sys.executable
+        
+        try:
+            # Framework package mapping
+            framework_packages = {
+                "pytest": ["pytest"],
+                "nose": ["nose"],
+                "unittest": []  # built-in, no installation needed
+            }
+            
+            if framework not in framework_packages:
+                return {
+                    "success": False,
+                    "message": f"Unknown test framework for installation: {framework}"
+                }
+            
+            packages = framework_packages[framework]
+            if not packages:
+                return {
+                    "success": True,
+                    "message": f"{framework} is built-in, no installation needed"
+                }
+            
+            logger.info(f"Auto-installing test framework: {framework} (packages: {packages})")
+            
+            # Use existing dependency management method
+            dependency_inputs = {
+                "operation": "install",
+                "packages": packages,
+                "python_executable": python_executable,
+                "working_directory": working_directory
+            }
+            install_result = self._handle_dependency_management(dependency_inputs, global_context)
+            
+            if install_result.success:
+                # Verify installation worked
+                availability_check = self._check_framework_availability(framework, python_executable)
+                if availability_check["available"]:
+                    return {
+                        "success": True,
+                        "message": f"Successfully installed and verified {framework}",
+                        "packages_installed": packages,
+                        "verification": availability_check
+                    }
+                else:
+                    return {
+                        "success": False,
+                        "message": f"Installation completed but {framework} still not available",
+                        "packages_installed": packages,
+                        "verification_failed": availability_check
+                    }
+            else:
+                return {
+                    "success": False,
+                    "message": f"Failed to install {framework}: {install_result.message}",
+                    "install_details": install_result.error_details
+                }
+                
+        except Exception as e:
+            logger.error(f"Error auto-installing {framework}: {e}", exc_info=True)
+            return {
+                "success": False,
+                "message": f"Exception during {framework} installation: {e}",
+                "error": str(e)
+            }
+
     def _create_task_graph_from_commands(self, commands: List[str], goal: str, 
                                        working_directory: str) -> 'TaskGraph':
         """Convert list of commands into a TaskGraph for orchestration."""
