@@ -63,7 +63,7 @@ class IntelligentInteractiveSession:
                 self.ui.display_system_message(f"Session resumed from snapshot: {resume_snapshot}")
             else:
                 workspace = Path(workspace_path) if workspace_path else Path.cwd()
-                self.global_context = GlobalContext(workspace_path=workspace)
+                self.global_context = GlobalContext(workspace_path=str(workspace))
                 
             # Initialize intelligent workflow coordinator with UI transparency
             self.workflow_coordinator = WorkflowCoordinator(llm_client=llm_client, ui_interface=self.ui)
