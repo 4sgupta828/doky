@@ -29,6 +29,18 @@ class WorkflowStatus(Enum):
     COMPLETED = "completed"
     FAILED = "failed"
     MAX_HOPS_EXCEEDED = "max_hops_exceeded"
+    SELF_DEBUGGING = "self_debugging"
+    USER_CONSULTATION_NEEDED = "user_consultation_needed"
+
+
+class FailureType(Enum):
+    """Types of routing/agent execution failures."""
+    INCORRECT_ROUTING = "incorrect_routing"
+    INSUFFICIENT_CONTEXT = "insufficient_context"
+    TARGET_AGENT_MISROUTING = "target_agent_misrouting"
+    CAPABILITY_EXECUTION_FAILURE = "capability_execution_failure"
+    AGENT_NOT_FOUND = "agent_not_found"
+    EXECUTION_EXCEPTION = "execution_exception"
 
 
 @dataclass
@@ -59,6 +71,20 @@ class WorkflowContext:
 
 
 @dataclass
+class FailureAnalysis:
+    """Analysis of an agent execution failure."""
+    failure_type: FailureType
+    failed_agent: str
+    failure_description: str
+    root_cause: str
+    remediation_plan: str
+    confidence: float
+    requires_user_consultation: bool = False
+    consultation_prompt: str = ""
+    timestamp: str = field(default_factory=lambda: str(__import__('datetime').datetime.now()))
+
+
+@dataclass
 class NextAgentDecision:
     """Decision about which agent to invoke next."""
     agent_name: str
@@ -68,6 +94,7 @@ class NextAgentDecision:
     goal_for_agent: str
     is_completion: bool = False
     completion_summary: str = ""
+    failure_analysis: Optional[FailureAnalysis] = None
 
 
 class InterAgentRouter:
@@ -158,8 +185,25 @@ class InterAgentRouter:
                 if execution_result.result.success and execution_result.result.outputs:
                     workflow_context.accumulated_outputs.update(execution_result.result.outputs)
                 
-                # Determine next agent (with failure context if needed)
+                # Determine next agent (with failure analysis if needed)
                 next_decision = self._determine_next_agent(workflow_context, global_context)
+                
+                # If agent failed, perform self-debugging analysis
+                if not execution_result.result.success:
+                    workflow_context.status = WorkflowStatus.SELF_DEBUGGING
+                    failure_analysis = self._perform_failure_analysis(execution_result, workflow_context, global_context)
+                    
+                    if failure_analysis.requires_user_consultation:
+                        workflow_context.status = WorkflowStatus.USER_CONSULTATION_NEEDED
+                        logger.info(f"User consultation required: {failure_analysis.consultation_prompt}")
+                        # Display consultation prompt to user if UI is available
+                        if self.ui_interface and hasattr(self.ui_interface, 'request_user_consultation'):
+                            self.ui_interface.request_user_consultation(failure_analysis)
+                        break
+                    else:
+                        # Apply remediation plan
+                        next_decision = self._apply_remediation_plan(failure_analysis, workflow_context, global_context)
+                        workflow_context.status = WorkflowStatus.IN_PROGRESS
                 
                 if next_decision.is_completion:
                     # Workflow is complete
@@ -197,7 +241,9 @@ class InterAgentRouter:
     
     def _execute_agent(self, agent_name: str, goal: str, inputs: Dict[str, Any], 
                       global_context: GlobalContext, workflow_context: WorkflowContext) -> Optional[AgentExecution]:
-        """Execute a single agent and return the execution record."""
+        """Execute a single agent and return the execution record with enhanced failure context."""
+        
+        execution_start_time = __import__('datetime').datetime.now()
         
         try:
             # Display agent input to user if UI is available
@@ -208,46 +254,96 @@ class InterAgentRouter:
             agent_class = self.agent_registry.get(agent_name)
             if not agent_class:
                 logger.error(f"Agent not found in registry: {agent_name}")
-                return None
+                # Create failure result for analysis
+                failure_result = AgentResult(
+                    success=False,
+                    message=f"Agent '{agent_name}' not found in registry",
+                    outputs={"failure_type": "agent_not_found", "available_agents": list(self.agent_registry.keys())}
+                )
+                return self._create_execution_record(agent_name, goal, inputs, failure_result, workflow_context, execution_start_time)
             
             # Instantiate agent with LLM client
-            if hasattr(agent_class, '__init__'):
-                try:
-                    # Try to pass llm_client if agent accepts it
-                    agent_instance = agent_class(llm_client=self.llm_client)
-                except TypeError:
-                    # Fallback to default constructor
+            try:
+                if hasattr(agent_class, '__init__'):
+                    try:
+                        # Try to pass llm_client if agent accepts it
+                        agent_instance = agent_class(llm_client=self.llm_client)
+                    except TypeError:
+                        # Fallback to default constructor
+                        agent_instance = agent_class()
+                else:
                     agent_instance = agent_class()
-            else:
-                agent_instance = agent_class()
+            except Exception as instantiation_error:
+                logger.error(f"Failed to instantiate agent {agent_name}: {instantiation_error}")
+                failure_result = AgentResult(
+                    success=False,
+                    message=f"Failed to instantiate {agent_name}: {str(instantiation_error)}",
+                    outputs={"failure_type": "instantiation_error", "error_details": str(instantiation_error)}
+                )
+                return self._create_execution_record(agent_name, goal, inputs, failure_result, workflow_context, execution_start_time)
             
-            # Execute agent
-            result = agent_instance.execute(goal, inputs, global_context)
+            # Execute agent with enhanced error context
+            try:
+                result = agent_instance.execute(goal, inputs, global_context)
+            except Exception as execution_error:
+                logger.error(f"Agent {agent_name} execution failed: {execution_error}", exc_info=True)
+                failure_result = AgentResult(
+                    success=False,
+                    message=f"Execution exception in {agent_name}: {str(execution_error)}",
+                    outputs={
+                        "failure_type": "execution_exception",
+                        "error_details": str(execution_error),
+                        "error_type": type(execution_error).__name__
+                    }
+                )
+                return self._create_execution_record(agent_name, goal, inputs, failure_result, workflow_context, execution_start_time)
             
             # Display agent output to user if UI is available
             if self.ui_interface and hasattr(self.ui_interface, 'display_agent_output'):
                 self.ui_interface.display_agent_output(agent_name, result.success, result.message, result.outputs)
             
-            # Create execution record
-            execution = AgentExecution(
-                agent_name=agent_name,
-                goal=goal,
-                inputs=inputs,
-                result=result,
-                execution_order=len(workflow_context.execution_history) + 1,
-                reasoning=f"Executed {agent_name} for: {goal}",
-                confidence=1.0  # Actual execution always has confidence 1.0
-            )
+            execution_record = self._create_execution_record(agent_name, goal, inputs, result, workflow_context, execution_start_time)
             
             logger.info(f"Agent {agent_name} executed: {'SUCCESS' if result.success else 'FAILED'}")
             if not result.success:
                 logger.warning(f"Agent failure: {result.message}")
             
-            return execution
+            return execution_record
             
         except Exception as e:
-            logger.error(f"Failed to execute agent {agent_name}: {e}", exc_info=True)
-            return None
+            logger.error(f"Unexpected error executing agent {agent_name}: {e}", exc_info=True)
+            failure_result = AgentResult(
+                success=False,
+                message=f"Unexpected execution error: {str(e)}",
+                outputs={"failure_type": "unexpected_error", "error_details": str(e)}
+            )
+            return self._create_execution_record(agent_name, goal, inputs, failure_result, workflow_context, execution_start_time)
+    
+    def _create_execution_record(self, agent_name: str, goal: str, inputs: Dict[str, Any], 
+                               result: AgentResult, workflow_context: WorkflowContext,
+                               start_time: Any) -> AgentExecution:
+        """Create an execution record with timing and enhanced context."""
+        end_time = __import__('datetime').datetime.now()
+        execution_duration = (end_time - start_time).total_seconds()
+        
+        # Add execution metadata to result outputs
+        if result.outputs is None:
+            result.outputs = {}
+        result.outputs.update({
+            "execution_duration_seconds": execution_duration,
+            "execution_start_time": start_time.isoformat(),
+            "execution_end_time": end_time.isoformat()
+        })
+        
+        return AgentExecution(
+            agent_name=agent_name,
+            goal=goal,
+            inputs=inputs,
+            result=result,
+            execution_order=len(workflow_context.execution_history) + 1,
+            reasoning=f"Executed {agent_name} for: {goal}",
+            confidence=1.0 if result.success else 0.0  # Failed executions have 0 confidence
+        )
     
     def _determine_next_agent(self, workflow_context: WorkflowContext, 
                              global_context: GlobalContext) -> NextAgentDecision:
@@ -910,6 +1006,324 @@ class InterAgentRouter:
         json_content = re.sub(r',(\s*[}\]])', r'\1', json_content)
         
         return json_content
+    
+    def _perform_failure_analysis(self, failed_execution: AgentExecution, 
+                                workflow_context: WorkflowContext, 
+                                global_context: GlobalContext) -> FailureAnalysis:
+        """Perform comprehensive self-analysis of agent execution failure."""
+        
+        logger.info(f"Performing failure analysis for {failed_execution.agent_name}")
+        
+        if not self.llm_client:
+            # Fallback analysis without LLM
+            return self._create_fallback_failure_analysis(failed_execution, workflow_context)
+        
+        try:
+            # Build self-analysis prompt
+            analysis_prompt = self._build_failure_analysis_prompt(failed_execution, workflow_context, global_context)
+            
+            # Get LLM analysis
+            response_str = self.llm_client.invoke(analysis_prompt)
+            
+            # Parse response
+            sanitized_response = self._sanitize_json_response(response_str)
+            response_data = json.loads(sanitized_response)
+            
+            # Create failure analysis from response
+            return self._parse_failure_analysis(response_data, failed_execution)
+            
+        except Exception as e:
+            logger.error(f"LLM failure analysis failed: {e}")
+            return self._create_fallback_failure_analysis(failed_execution, workflow_context)
+    
+    def _build_failure_analysis_prompt(self, failed_execution: AgentExecution,
+                                     workflow_context: WorkflowContext,
+                                     global_context: GlobalContext) -> str:
+        """Build comprehensive failure analysis prompt for LLM."""
+        
+        # Get recent execution history for context
+        recent_history = workflow_context.execution_history[-5:] if workflow_context.execution_history else []
+        history_summary = self._format_execution_history(recent_history)
+        
+        # Get workspace context
+        workspace_files = global_context.workspace.list_files() if global_context.workspace else []
+        workspace_context = f"Workspace files: {len(workspace_files)} files" if workspace_files else "No workspace"
+        
+        # Extract failure details
+        failure_outputs = failed_execution.result.outputs or {}
+        failure_type_hint = failure_outputs.get("failure_type", "unknown")
+        error_details = failure_outputs.get("error_details", "")
+        
+        return f"""
+        You are the Self-Debugging Intelligence for the Inter-Agent Router. 
+        An agent execution has FAILED and you must perform thorough failure analysis.
+        
+        **YOUR TASK:** Analyze the failure, identify the root cause, and create a remediation plan.
+        
+        **USER'S ORIGINAL GOAL:** "{workflow_context.user_goal}"
+        
+        **FAILED EXECUTION DETAILS:**
+        - Agent: {failed_execution.agent_name}
+        - Goal: {failed_execution.goal}
+        - Inputs: {json.dumps(failed_execution.inputs, indent=2)}
+        - Failure Message: {failed_execution.result.message}
+        - Error Details: {error_details}
+        - Execution Duration: {failure_outputs.get('execution_duration_seconds', 'unknown')} seconds
+        - Failure Type Hint: {failure_type_hint}
+        
+        **RECENT EXECUTION HISTORY:**
+        {history_summary}
+        
+        **WORKFLOW CONTEXT:**
+        - Current Hop: {workflow_context.current_hop}/{workflow_context.max_hops}
+        - Total Executions: {len(workflow_context.execution_history)}
+        - Accumulated Outputs: {len(workflow_context.accumulated_outputs)} keys
+        
+        **WORKSPACE CONTEXT:**
+        {workspace_context}
+        
+        **FAILURE TYPE CATEGORIES TO ANALYZE:**
+        
+        1. **INCORRECT_ROUTING** - The request was sent to the wrong agent
+           - Signs: Agent capabilities don't match the goal
+           - Signs: Agent confusion or "I don't handle this" responses
+           - Signs: Goal requires different foundational capabilities
+        
+        2. **INSUFFICIENT_CONTEXT** - Routing was correct, but provided context was incomplete
+           - Signs: Agent asks for missing information
+           - Signs: "Cannot proceed without X" type errors
+           - Signs: Agent has capability but lacks necessary inputs
+        
+        3. **TARGET_AGENT_MISROUTING** - Agent's internal LLM router chose wrong capability
+           - Signs: Agent executed but chose wrong internal operation
+           - Signs: Right agent, wrong sub-capability invoked
+           - Signs: Agent seemed confused about which internal tool to use
+        
+        4. **CAPABILITY_EXECUTION_FAILURE** - Right agent, right capability, but execution failed
+           - Signs: Technical errors (file not found, syntax errors, etc.)
+           - Signs: Environment issues (missing dependencies, permissions)
+           - Signs: Code execution failures or runtime errors
+        
+        **SELF-DEBUGGING ANALYSIS PROCESS:**
+        
+        1. **FAILURE CLASSIFICATION:** Which failure type best matches the evidence?
+        2. **ROOT CAUSE ANALYSIS:** What specifically went wrong and why?
+        3. **CONTEXT EVALUATION:** Was the routing decision reasonable given available information?
+        4. **PATTERN RECOGNITION:** Is this failure part of a larger pattern in the workflow?
+        5. **REMEDIATION STRATEGY:** What specific actions will address the root cause?
+        
+        **REMEDIATION OPTIONS:**
+        
+        - **Route to Different Agent:** If wrong agent was selected
+        - **Enhance Context:** If inputs were insufficient, gather missing information
+        - **Retry with Better Instructions:** If agent misrouted internally
+        - **Technical Problem Solving:** If execution failed due to technical issues
+        - **User Consultation:** If problem is unclear or requires human judgment
+        
+        **CRITICAL INSTRUCTIONS:**
+        
+        - Be HONEST about routing mistakes - admit when the router made a poor decision
+        - Be SPECIFIC about what information is missing or what went wrong
+        - FOCUS on actionable remediation - what concrete steps will fix this?
+        - Consider the WORKFLOW CONTEXT - is this failure blocking overall progress?
+        - If you cannot determine a clear remediation path, recommend USER CONSULTATION
+        
+        **RESPONSE FORMAT:**
+        Your response must be a single JSON object with these exact keys:
+        {{
+            "failure_type": "incorrect_routing|insufficient_context|target_agent_misrouting|capability_execution_failure",
+            "root_cause": "Detailed explanation of what specifically went wrong and why",
+            "failure_description": "Clear summary of the failure for logging/reporting",
+            "remediation_plan": "Specific, actionable steps to address the root cause",
+            "confidence": 0.85,
+            "requires_user_consultation": false,
+            "consultation_prompt": "If requires_user_consultation is true, what to ask the user"
+        }}
+        
+        **REMEMBER:** Your analysis should be thorough, honest, and focused on getting the workflow back on track.
+        Analyze the failure and provide a clear path forward.
+        """
+    
+    def _parse_failure_analysis(self, response_data: Dict[str, Any], 
+                              failed_execution: AgentExecution) -> FailureAnalysis:
+        """Parse LLM response into FailureAnalysis object."""
+        
+        failure_type_str = response_data.get("failure_type", "capability_execution_failure")
+        
+        # Map string to FailureType enum
+        failure_type = None
+        for ft in FailureType:
+            if ft.value == failure_type_str:
+                failure_type = ft
+                break
+        
+        if not failure_type:
+            logger.warning(f"Unknown failure type: {failure_type_str}, defaulting to capability_execution_failure")
+            failure_type = FailureType.CAPABILITY_EXECUTION_FAILURE
+        
+        return FailureAnalysis(
+            failure_type=failure_type,
+            failed_agent=failed_execution.agent_name,
+            failure_description=response_data.get("failure_description", f"{failed_execution.agent_name} execution failed"),
+            root_cause=response_data.get("root_cause", "Unknown root cause"),
+            remediation_plan=response_data.get("remediation_plan", "Retry with DebuggingAgent"),
+            confidence=float(response_data.get("confidence", 0.5)),
+            requires_user_consultation=bool(response_data.get("requires_user_consultation", False)),
+            consultation_prompt=response_data.get("consultation_prompt", "")
+        )
+    
+    def _create_fallback_failure_analysis(self, failed_execution: AgentExecution,
+                                        workflow_context: WorkflowContext) -> FailureAnalysis:
+        """Create basic failure analysis when LLM analysis is not available."""
+        
+        failure_outputs = failed_execution.result.outputs or {}
+        failure_type_hint = failure_outputs.get("failure_type", "unknown")
+        
+        # Map hint to failure type
+        if failure_type_hint == "agent_not_found":
+            failure_type = FailureType.AGENT_NOT_FOUND
+        elif failure_type_hint in ["execution_exception", "instantiation_error", "unexpected_error"]:
+            failure_type = FailureType.EXECUTION_EXCEPTION
+        else:
+            failure_type = FailureType.CAPABILITY_EXECUTION_FAILURE
+        
+        return FailureAnalysis(
+            failure_type=failure_type,
+            failed_agent=failed_execution.agent_name,
+            failure_description=f"Fallback analysis: {failed_execution.agent_name} failed",
+            root_cause=failed_execution.result.message,
+            remediation_plan="Route to DebuggingAgent for systematic analysis",
+            confidence=0.3,
+            requires_user_consultation=workflow_context.current_hop >= workflow_context.max_hops - 2  # Near max hops
+        )
+    
+    def _apply_remediation_plan(self, failure_analysis: FailureAnalysis,
+                              workflow_context: WorkflowContext,
+                              global_context: GlobalContext) -> NextAgentDecision:
+        """Apply the remediation plan to determine the next course of action."""
+        
+        logger.info(f"Applying remediation plan for {failure_analysis.failure_type.value}")
+        
+        if failure_analysis.failure_type == FailureType.INCORRECT_ROUTING:
+            return self._remediate_incorrect_routing(failure_analysis, workflow_context, global_context)
+        
+        elif failure_analysis.failure_type == FailureType.INSUFFICIENT_CONTEXT:
+            return self._remediate_insufficient_context(failure_analysis, workflow_context, global_context)
+        
+        elif failure_analysis.failure_type == FailureType.TARGET_AGENT_MISROUTING:
+            return self._remediate_target_agent_misrouting(failure_analysis, workflow_context, global_context)
+        
+        elif failure_analysis.failure_type == FailureType.CAPABILITY_EXECUTION_FAILURE:
+            return self._remediate_capability_failure(failure_analysis, workflow_context, global_context)
+        
+        else:
+            # Default remediation
+            return NextAgentDecision(
+                agent_name="DebuggingAgent",
+                confidence=0.7,
+                reasoning=f"Fallback remediation for {failure_analysis.failure_type.value}",
+                recommended_inputs={
+                    "problem_description": failure_analysis.failure_description,
+                    "root_cause": failure_analysis.root_cause,
+                    "failed_agent": failure_analysis.failed_agent,
+                    "debugging_mode": "full_debugging"
+                },
+                goal_for_agent=f"Debug and resolve: {failure_analysis.failure_description}",
+                failure_analysis=failure_analysis
+            )
+    
+    def _remediate_incorrect_routing(self, analysis: FailureAnalysis,
+                                   workflow_context: WorkflowContext,
+                                   global_context: GlobalContext) -> NextAgentDecision:
+        """Remediate incorrect routing decisions."""
+        
+        # Route to AnalystAgent to reassess the approach
+        return NextAgentDecision(
+            agent_name="AnalystAgent",
+            confidence=0.8,
+            reasoning=f"Incorrect routing detected for {analysis.failed_agent}. Reassessing approach.",
+            recommended_inputs={
+                "analysis_type": "problem_analysis",
+                "failed_routing_context": {
+                    "failed_agent": analysis.failed_agent,
+                    "original_goal": workflow_context.user_goal,
+                    "root_cause": analysis.root_cause
+                }
+            },
+            goal_for_agent=f"Reassess approach after routing failure: {analysis.failure_description}",
+            failure_analysis=analysis
+        )
+    
+    def _remediate_insufficient_context(self, analysis: FailureAnalysis,
+                                      workflow_context: WorkflowContext,
+                                      global_context: GlobalContext) -> NextAgentDecision:
+        """Remediate insufficient context issues."""
+        
+        # Route to AnalystAgent to gather missing context
+        return NextAgentDecision(
+            agent_name="AnalystAgent",
+            confidence=0.8,
+            reasoning=f"Insufficient context for {analysis.failed_agent}. Gathering missing information.",
+            recommended_inputs={
+                "analysis_type": "comprehensive_analysis",
+                "context_gathering_focus": analysis.root_cause,
+                "failed_agent_needs": analysis.failed_agent
+            },
+            goal_for_agent=f"Gather missing context: {analysis.failure_description}",
+            failure_analysis=analysis
+        )
+    
+    def _remediate_target_agent_misrouting(self, analysis: FailureAnalysis,
+                                         workflow_context: WorkflowContext,
+                                         global_context: GlobalContext) -> NextAgentDecision:
+        """Remediate target agent internal misrouting."""
+        
+        # Get the last execution to extract the goal and inputs
+        last_execution = workflow_context.execution_history[-1] if workflow_context.execution_history else None
+        
+        if last_execution:
+            # Retry the same agent with more specific instructions
+            enhanced_inputs = last_execution.inputs.copy()
+            enhanced_inputs.update({
+                "retry_context": {
+                    "previous_failure": analysis.failure_description,
+                    "routing_guidance": analysis.remediation_plan,
+                    "force_specific_operation": True
+                }
+            })
+            
+            return NextAgentDecision(
+                agent_name=analysis.failed_agent,
+                confidence=0.7,
+                reasoning=f"Retrying {analysis.failed_agent} with enhanced routing guidance",
+                recommended_inputs=enhanced_inputs,
+                goal_for_agent=f"RETRY with specific guidance: {last_execution.goal}",
+                failure_analysis=analysis
+            )
+        else:
+            # Fallback to debugging
+            return self._remediate_capability_failure(analysis, workflow_context, global_context)
+    
+    def _remediate_capability_failure(self, analysis: FailureAnalysis,
+                                    workflow_context: WorkflowContext,
+                                    global_context: GlobalContext) -> NextAgentDecision:
+        """Remediate capability execution failures."""
+        
+        # Route to DebuggingAgent for systematic troubleshooting
+        return NextAgentDecision(
+            agent_name="DebuggingAgent",
+            confidence=0.9,
+            reasoning=f"Capability execution failure in {analysis.failed_agent}. Systematic debugging required.",
+            recommended_inputs={
+                "problem_description": analysis.failure_description,
+                "root_cause": analysis.root_cause,
+                "failed_agent": analysis.failed_agent,
+                "debugging_mode": "fix_validation",
+                "workspace_path": str(global_context.workspace.repo_path) if global_context.workspace else "/tmp"
+            },
+            goal_for_agent=f"Debug and fix: {analysis.failure_description}",
+            failure_analysis=analysis
+        )
 
 
 def execute_multi_agent_workflow(user_goal: str, initial_inputs: Dict[str, Any],
