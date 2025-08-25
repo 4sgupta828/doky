@@ -364,8 +364,10 @@ def main(args: List[str]) -> None:
     parser.add_argument(
         "--resume",
         type=str,
+        nargs='?',
+        const="auto",
         default=None,
-        help="Path to a snapshot file to resume from (for crash recovery)."
+        help="Resume from snapshot. Options: 'auto'/'latest' (auto-discover most recent), 'list' (show available snapshots), or specify a snapshot file path."
     )
     parser.add_argument(
         "--quiet-logs",
@@ -399,6 +401,33 @@ def main(args: List[str]) -> None:
         return
     
     parsed_args = parser.parse_args(args)
+    
+    # Resolve resume argument to actual snapshot file path
+    resume_snapshot = None
+    if parsed_args.resume is not None:
+        from utils.snapshot_utils import resolve_resume_argument, validate_snapshot_file, display_available_snapshots
+        
+        if parsed_args.resume == "list":
+            # Special case: just list available snapshots and exit
+            print("📁 Available snapshots:")
+            display_available_snapshots(parsed_args.workspace)
+            return
+        
+        resume_snapshot = resolve_resume_argument(parsed_args.resume, parsed_args.workspace)
+        
+        if resume_snapshot:
+            if validate_snapshot_file(resume_snapshot):
+                print(f"✅ Resuming from snapshot: {resume_snapshot}")
+            else:
+                print(f"❌ Invalid snapshot file: {resume_snapshot}")
+                print("🔄 Falling back to new session")
+                resume_snapshot = None
+        else:
+            print("⚠️  No valid snapshots found for resumption")
+            if parsed_args.workspace:
+                print(f"💡 Searched workspace: {parsed_args.workspace}")
+            print("🔄 Starting new session instead")
+            resume_snapshot = None
     
     # Setup logging
     setup_logger(suppress_console_logs=parsed_args.quiet_logs)
@@ -450,7 +479,7 @@ def main(args: List[str]) -> None:
     try:
         session = IntelligentInteractiveSession(
             workspace_path=parsed_args.workspace,
-            resume_snapshot=parsed_args.resume,
+            resume_snapshot=resume_snapshot,
             llm_client=llm_client
         )
         session.start()
@@ -466,6 +495,13 @@ def main(args: List[str]) -> None:
 if __name__ == "__main__":
     # To run the application:
     # python main_interactive_intelligent.py --workspace ./my_project
+    #
+    # Resume examples:
+    # python main_interactive_intelligent.py --resume              # Auto-discover latest snapshot
+    # python main_interactive_intelligent.py --resume auto        # Same as above  
+    # python main_interactive_intelligent.py --resume latest      # Same as above
+    # python main_interactive_intelligent.py --resume list        # List available snapshots
+    # python main_interactive_intelligent.py --resume /path/to/snapshot.json  # Specific snapshot
     
     # To run tests:
     # python main_interactive_intelligent.py --test

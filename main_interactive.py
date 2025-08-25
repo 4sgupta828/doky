@@ -40,8 +40,10 @@ def main(args: List[str]) -> None:
     parser.add_argument(
         "--resume",
         type=str,
+        nargs='?',
+        const="auto",
         default=None,
-        help="Path to a snapshot file to resume from (for crash recovery)."
+        help="Resume from snapshot. Options: 'auto'/'latest' (auto-discover most recent), 'list' (show available snapshots), or specify a snapshot file path."
     )
     parser.add_argument(
         "--quiet-logs",
@@ -56,8 +58,35 @@ def main(args: List[str]) -> None:
 
     parsed_args = parser.parse_args(args)
     workspace_path = parsed_args.workspace
-    resume_snapshot = parsed_args.resume
+    resume_arg = parsed_args.resume
     quiet_logs = parsed_args.quiet_logs
+    
+    # Resolve resume argument to actual snapshot file path
+    resume_snapshot = None
+    if resume_arg is not None:
+        from utils.snapshot_utils import resolve_resume_argument, validate_snapshot_file, display_available_snapshots
+        
+        if resume_arg == "list":
+            # Special case: just list available snapshots and exit
+            print("📁 Available snapshots:")
+            display_available_snapshots(workspace_path)
+            return
+        
+        resume_snapshot = resolve_resume_argument(resume_arg, workspace_path)
+        
+        if resume_snapshot:
+            if validate_snapshot_file(resume_snapshot):
+                print(f"✅ Resuming from snapshot: {resume_snapshot}")
+            else:
+                print(f"❌ Invalid snapshot file: {resume_snapshot}")
+                print("🔄 Falling back to new session")
+                resume_snapshot = None
+        else:
+            print("⚠️  No valid snapshots found for resumption")
+            if workspace_path:
+                print(f"💡 Searched workspace: {workspace_path}")
+            print("🔄 Starting new session instead")
+            resume_snapshot = None
 
     # 2. Setup application-wide logging with optional console suppression.
     setup_logger(suppress_console_logs=quiet_logs)
@@ -77,6 +106,13 @@ def main(args: List[str]) -> None:
 if __name__ == "__main__":
     # To run the real application from your terminal:
     # python main_interactive.py --workspace ./my_project
+    #
+    # Resume examples:
+    # python main_interactive.py --resume                 # Auto-discover latest snapshot
+    # python main_interactive.py --resume auto           # Same as above  
+    # python main_interactive.py --resume latest         # Same as above
+    # python main_interactive.py --resume list           # List available snapshots
+    # python main_interactive.py --resume /path/to/snapshot.json  # Specific snapshot
     
     # To run the tests for this file:
     # python main_interactive.py --test
